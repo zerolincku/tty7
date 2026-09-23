@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use alacritty_terminal::event::{Event as AlacEvent, EventListener};
+use alacritty_terminal::grid::Dimensions as _;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{self, CursorShape, CursorStyle};
@@ -36,6 +37,7 @@ use super::size::TermSize;
 pub struct EventProxy {
     tx: smol::channel::Sender<AlacEvent>,
     replaying: Arc<AtomicBool>,
+    prompt_redraw_pending: Arc<AtomicBool>,
 }
 
 impl EventListener for EventProxy {
@@ -1022,6 +1024,7 @@ impl RemoteTerminal {
         let proxy = EventProxy {
             tx,
             replaying: Arc::new(AtomicBool::new(false)),
+            prompt_redraw_pending: Arc::new(AtomicBool::new(false)),
         };
 
         let user_config = crate::core::config::Config::load();
@@ -1316,6 +1319,15 @@ impl RemoteTerminal {
                                         }
                                         processor.advance(&mut *term, &out_batch[at..]);
                                     }
+                                    // A redraw may arrive as separate erase and
+                                    // text batches. Do not expose the erased
+                                    // prompt just because some bytes arrived.
+                                    if proxy.prompt_redraw_pending.load(Ordering::Relaxed) {
+                                        let row = &term.grid()[term.grid().cursor.point.line];
+                                        if (0..term.columns()).any(|col| row[alacritty_terminal::index::Column(col)].c != ' ') {
+                                            proxy.prompt_redraw_pending.store(false, Ordering::Relaxed);
+                                        }
+                                    }
                                     if let (Some(t0), Some(t1)) = (t0, t1) {
                                         tr_lock_t += t1 - t0;
                                         tr_adv_t += t1.elapsed();
@@ -1429,11 +1441,13 @@ impl RemoteTerminal {
                                     if quit.load(Ordering::SeqCst) {
                                         return;
                                     }
-                                    super::prompt_reflow::resize(
+                                    if super::prompt_reflow::resize(
                                         &mut term,
                                         TermSize::new(ws.cols as usize, ws.rows as usize),
                                         shell_redraws,
-                                    );
+                                    ) {
+                                        proxy.prompt_redraw_pending.store(true, Ordering::Relaxed);
+                                    }
                                 }
                                 proxy.send_event(AlacEvent::Wakeup);
                             }
@@ -1790,6 +1804,10 @@ impl RemoteTerminal {
         self.local_conpty.load(Ordering::Relaxed)
     }
 
+    pub(super) fn prompt_redraw_pending(&self) -> bool {
+        self.proxy.prompt_redraw_pending.load(Ordering::Relaxed)
+    }
+
     /// Queues a keystroke — or a paste, or a mouse report — for the link.
     ///
     /// Callers are gpui event handlers on the UI thread, so this returns
@@ -1870,7 +1888,12 @@ impl RemoteTerminal {
         self.synced_cell = cell;
         if !echoed {
             let shell_redraws = !self.is_local_conpty() && self.at_prompt();
-            super::prompt_reflow::resize(&mut self.term.lock(), size, shell_redraws);
+            let mut term = self.term.lock();
+            if super::prompt_reflow::resize(&mut term, size, shell_redraws) {
+                self.proxy
+                    .prompt_redraw_pending
+                    .store(true, Ordering::Relaxed);
+            }
         }
 
         let win = win_size(size, cell_w, cell_h);

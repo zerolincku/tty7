@@ -8126,6 +8126,7 @@ impl Render for Tty7App {
         // two spellings of "is the rail up" is one more than the layout can
         // afford to have disagree.
         let rail = self.sidebar_open(cx);
+        let compact_terminal_top = cfg!(target_os = "macos") && rail;
         // Both read before the strip and the sidebar are built: a tab held out
         // over the layout suspends the reorder, which is what those two ask
         // what to draw, and a pane held over *them* is measured against where
@@ -8308,7 +8309,11 @@ impl Render for Tty7App {
         // inside the terminal column with a column drawn to the right of it.
         let panel_below_title_bar =
             (right_panel.is_some() || document_column.is_some()) && !cfg!(target_os = "macos");
-        let (column_title_bar, spanning_title_bar) = if panel_below_title_bar {
+        // The macOS sidebar already owns the traffic lights and drag area.
+        // Vertical tabs need only a small content inset, not another title bar.
+        let (column_title_bar, spanning_title_bar) = if compact_terminal_top {
+            (None, None)
+        } else if panel_below_title_bar {
             (None, Some(title_bar))
         } else {
             (Some(title_bar), None)
@@ -8330,7 +8335,18 @@ impl Render for Tty7App {
             .flex_col()
             .relative()
             .when_some(column_title_bar, |this, bar| this.child(bar))
+            // Content spacing is independent of the floating window buttons.
+            .when(compact_terminal_top, |this| this.pt(px(CONTENT_INSET)))
             .child(body_area)
+            .when(compact_terminal_top && !self.right_panel_open(cx), |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top(px((TITLE_BAR_HEIGHT - TILE_SIZE) / 2.))
+                        .right_0()
+                        .child(self.window_chrome(window, cx)),
+                )
+            })
             .children(column_overlays);
         let panel_row = div()
             .flex_1()

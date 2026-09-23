@@ -20,6 +20,9 @@ use crate::core::config::Config;
 
 const DIM_OPACITY: f32 = 0.66;
 
+const RESIZE_FRAME_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
+const PROMPT_REDRAW_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// How much of the text's own colour a link's underline keeps before the
 /// modifier is down. Low enough to read as a hint rather than as markup, high
 /// enough to survive a light theme.
@@ -1613,6 +1616,8 @@ fn paint_marked(
 
 #[derive(Clone)]
 pub(super) struct GridSnapshot {
+    rows: usize,
+    cols: usize,
     cursor: Option<GridCursor>,
     sliver: Option<Vec<RenderCell>>,
     any_selected: bool,
@@ -1651,6 +1656,7 @@ impl TerminalElement {
         dim: f32,
         under: Rgba,
         must_block: bool,
+        resize_age: Option<std::time::Duration>,
     ) -> Option<GridSnapshot> {
         let mut cursor: Option<GridCursor> = None;
         let mut sliver: Option<Vec<RenderCell>> = None;
@@ -1678,13 +1684,22 @@ impl TerminalElement {
             // waits.
             let term = match term.try_lock_unfair() {
                 Some(term) => term,
-                // The two frames that have to have it: the first one, with no
-                // previous grid to fall back on, and the one after a resize,
-                // where the previous grid is the wrong shape. Both are rare and
-                // neither is in the steady state.
+                // Only the first frame has no previous grid to fall back on.
                 None if must_block => term.lock(),
                 None => return None,
             };
+            // A Size echo can clear the prompt before the shell redraws it.
+            // Geometry acknowledgement is fast; shell prompt hooks can take
+            // longer. Release immediately when text arrives, with a separate
+            // upper bound for empty prompts or a shell that never redraws.
+            let hold_resize_frame = resize_age.is_some_and(|age| {
+                ((term.screen_lines(), term.columns()) != (rows, cols) && age < RESIZE_FRAME_GRACE)
+                    || (self.view.read(cx).terminal.prompt_redraw_pending()
+                        && age < PROMPT_REDRAW_GRACE)
+            });
+            if hold_resize_frame && !must_block {
+                return None;
+            }
             // After the lock, not before: an early return must leave the
             // previous frame's cells intact for the caller to paint again.
             buf.clear();
@@ -1781,6 +1796,8 @@ impl TerminalElement {
             self.flag_search_matches(buf, rows, cols, display_offset, cx);
         self.flag_hovered_link(buf, rows, cols, display_offset, cx);
         Some(GridSnapshot {
+            rows,
+            cols,
             cursor,
             sliver,
             any_selected,
@@ -2107,7 +2124,7 @@ impl Element for TerminalElement {
 
         let frac = self.view.read(cx).scroll_frac.clamp(0., 1.);
         let input_shift = self.view.read(cx).input_scroll_rows();
-        let geom = CellGeom {
+        let mut geom = CellGeom {
             origin: point(
                 bounds.origin.x,
                 bounds.origin.y + prepaint.line_height * (frac - input_shift as f32),
@@ -2151,10 +2168,14 @@ impl Element for TerminalElement {
             .view
             .update(cx, |view, _| std::mem::take(&mut view.grid_buf));
         let previous = self.view.read(cx).grid_snap.clone();
-        // The two frames with nothing to fall back on: the first one this pane
-        // ever paints, and the one after a resize, whose previous grid is the
-        // wrong shape to paint into these bounds. Those wait for the lock.
-        let must_block = previous.is_none() || buf.len() != geom.rows * geom.cols;
+        // Cached cells retain their own row stride across a layout resize.
+        // Only a pane with no previous frame needs to wait for the reader.
+        let must_block = previous.is_none();
+        let resize_age = self
+            .view
+            .read(cx)
+            .resize_frame_started
+            .map(|at| at.elapsed());
         let built = self.build_grid(
             &colors,
             &mut buf,
@@ -2165,16 +2186,22 @@ impl Element for TerminalElement {
             dim,
             under,
             must_block,
+            resize_age,
         );
         if let Some(snap) = &built {
             let snap = snap.clone();
             self.view.update(cx, |view, _| view.grid_snap = Some(snap));
         }
-        // `must_block` above is exactly the condition under which `build_grid`
-        // is not allowed to come back empty, so one of the two is always here.
+        if built.is_none() && resize_age.is_some_and(|age| age < PROMPT_REDRAW_GRACE) {
+            // Also wake when an echo is lost: after the grace period, show
+            // live output rather than freezing the cached frame indefinitely.
+            window.request_animation_frame();
+        }
         let Some(snap) = built.or(previous) else {
             return;
         };
+        geom.rows = snap.rows;
+        geom.cols = snap.cols;
         let cursor = snap.cursor;
         let sliver = snap.sliver.as_ref();
 
@@ -2453,6 +2480,151 @@ fn drag_overshoot(y: Pixels, bounds: Bounds<Pixels>, line_height: Pixels) -> f32
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn resize_frames_keep_the_last_grid_until_the_echo(cx: &mut gpui::TestAppContext) {
+        use crate::daemon::protocol::{DaemonMsg, WinSize};
+        use crate::terminal::size::TermSize;
+        use alacritty_terminal::vte::ansi::Processor;
+
+        crate::core::config::pin_test_config_dir();
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Config::default());
+        });
+        let held = std::rc::Rc::new(RefCell::new(None));
+        let out = held.clone();
+        let window = cx.add_window(move |window, cx| {
+            let (pane, stream) = crate::terminal::view::quiet_test_pane(1, window, cx);
+            *out.borrow_mut() = Some((pane.clone(), stream));
+            gpui_component::Root::new(pane, window, cx)
+        });
+        let (pane, mut stream) = held.borrow_mut().take().unwrap();
+        window
+            .update(cx, |_, _, cx| {
+                let term = pane.read(cx).terminal.term.clone();
+                let mut parser: Processor = Processor::new();
+                let element = TerminalElement::new(pane.clone());
+                let colors = caret_colors();
+                let snapshot_after = |buf: &mut Vec<RenderCell>, cols, first, age| {
+                    element.build_grid(
+                        &colors,
+                        buf,
+                        24,
+                        cols,
+                        false,
+                        cx,
+                        1.,
+                        Rgba::default(),
+                        first,
+                        age,
+                    )
+                };
+                let snapshot = |buf: &mut Vec<RenderCell>, cols, first, hold: bool| {
+                    snapshot_after(buf, cols, first, hold.then_some(std::time::Duration::ZERO))
+                };
+                let mut buf = Vec::new();
+                let text = |buf: &[RenderCell]| buf.iter().map(|c| c.c).collect::<String>();
+                for (old_cols, new_cols) in [(80, 40), (40, 80), (80, 60)] {
+                    {
+                        let mut term = term.lock();
+                        term.resize(TermSize::new(old_cols, 24));
+                        parser.advance(&mut *term, b"\x1b[2J\x1b[Hfirst row\r\nsecond row");
+                    }
+                    let old = snapshot(&mut buf, old_cols, true, false).unwrap();
+                    let before = text(&buf);
+                    assert!(
+                        snapshot(&mut buf, new_cols, false, true).is_none(),
+                        "an unacknowledged resize must reuse the previous frame"
+                    );
+                    assert_eq!(text(&buf), before);
+                    assert_eq!((old.rows, old.cols), (24, old_cols));
+                    assert_eq!(&before[old.cols..old.cols + 10], "second row");
+
+                    // This is where the reader applies the in-stream Size echo.
+                    term.lock().resize(TermSize::new(new_cols, 24));
+                    let next = snapshot(&mut buf, new_cols, false, true).unwrap();
+                    assert_eq!((next.rows, next.cols), (24, new_cols));
+                    assert_eq!(buf.len(), next.rows * next.cols);
+                    assert_eq!(&text(&buf)[new_cols..new_cols + 10], "second row");
+                }
+                // A missing echo must not freeze output after the bounded hold.
+                assert!(snapshot(&mut buf, 40, false, false).is_some());
+                // The reported flash: Size clears the prompt, then zsh sends
+                // erase and replacement text in separate output batches.
+                {
+                    let mut term = term.lock();
+                    term.resize(TermSize::new(80, 24));
+                    parser.advance(&mut *term, b"\x1b[2J\x1b[Hhistory\r\nprompt> ");
+                }
+                snapshot(&mut buf, 80, true, false).unwrap();
+                let before = text(&buf);
+                // Live output ends the initial attach/replay phase.
+                DaemonMsg::Output(Vec::new()).encode(&mut stream).unwrap();
+                DaemonMsg::Prompt {
+                    active: true,
+                    at_prompt: true,
+                    last_exit: None,
+                }
+                .encode(&mut stream)
+                .unwrap();
+                DaemonMsg::Size(WinSize {
+                    cols: 40,
+                    rows: 24,
+                    cell_w: 8,
+                    cell_h: 17,
+                })
+                .encode(&mut stream)
+                .unwrap();
+                let wait = |ready: &dyn Fn() -> bool| {
+                    for _ in 0..500 {
+                        if ready() {
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                    panic!("reader did not apply the test frame");
+                };
+                wait(&|| pane.read(cx).terminal.prompt_redraw_pending());
+                assert_eq!(term.lock().columns(), 40);
+                assert!(
+                    snapshot(&mut buf, 40, false, true).is_none(),
+                    "Size must not publish a blank prompt"
+                );
+                assert_eq!(text(&buf), before);
+                DaemonMsg::Output(b"\r\x1b[K".to_vec())
+                    .encode(&mut stream)
+                    .unwrap();
+                wait(&|| term.lock().grid().cursor.point.column.0 == 0);
+                assert!(pane.read(cx).terminal.prompt_redraw_pending());
+                assert!(
+                    snapshot(&mut buf, 40, false, true).is_none(),
+                    "the erase-only batch must not publish a blank prompt"
+                );
+                let delayed = Some(std::time::Duration::from_millis(150));
+                assert!(
+                    snapshot_after(&mut buf, 40, false, delayed).is_none(),
+                    "a delayed shell redraw must remain protected past the geometry deadline"
+                );
+                assert_eq!(text(&buf), before);
+                let mut fallback = buf.clone();
+                assert!(
+                    snapshot_after(&mut fallback, 40, false, Some(PROMPT_REDRAW_GRACE)).is_some(),
+                    "a missing prompt redraw must eventually release the cached frame"
+                );
+                DaemonMsg::Output(b"prompt> ".to_vec())
+                    .encode(&mut stream)
+                    .unwrap();
+                wait(&|| !pane.read(cx).terminal.prompt_redraw_pending());
+                let redrawn = snapshot_after(&mut buf, 40, false, delayed).unwrap();
+                assert_eq!((redrawn.rows, redrawn.cols), (24, 40));
+                assert_eq!(&text(&buf)[40..48], "prompt> ");
+                // A newly opened pane has no previous frame to hold.
+                assert!(snapshot(&mut buf, 80, true, true).is_some());
+            })
+            .unwrap();
+    }
 
     fn caret_colors() -> PaintColors {
         PaintColors {

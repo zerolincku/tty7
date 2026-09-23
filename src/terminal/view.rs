@@ -339,6 +339,7 @@ pub struct TerminalView {
     /// pane* when the next one starts.
     pub(super) grid_buf: Vec<RenderCell>,
     pub(super) grid_snap: Option<GridSnapshot>,
+    pub(super) resize_frame_started: Option<std::time::Instant>,
     /// Terminal mode and selection as of the last frame that got the lock.
     /// What the *frame* declares — the keymap context it publishes, whether it
     /// draws a selection — is read from here, so drawing never queues behind
@@ -1621,6 +1622,7 @@ impl TerminalView {
             line_height: px(17.),
             grid_buf: Vec::new(),
             grid_snap: None,
+            resize_frame_started: None,
             frame_alt_screen: false,
             frame_has_selection: false,
             selecting: false,
@@ -1732,6 +1734,7 @@ impl TerminalView {
         // reflow nothing, so a height-only drag stays cheap.
         let cols_changed = cols != self.terminal.size().cols;
         if (cols, rows) != (self.terminal.size().cols, self.terminal.size().rows) {
+            self.resize_frame_started = Some(std::time::Instant::now());
             self.last_hover_cell = None;
             self.hovered_link = None;
         }
@@ -15165,6 +15168,7 @@ mod gpui_tests {
                     1.,
                     gpui::Rgba::default(),
                     must_block,
+                    None,
                 )
             })
         };

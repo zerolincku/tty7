@@ -38,13 +38,18 @@ use super::size::TermSize;
 /// Resizes `term` to `size`. `shell_redraws` says the pane is at a shell
 /// prompt that will repaint itself for the new width — the caller's shell
 /// integration state; everything else resizes exactly as `Term::resize` does.
-pub(super) fn resize<T: EventListener>(term: &mut Term<T>, size: TermSize, shell_redraws: bool) {
+/// Returns whether the prompt was cleared and needs the shell's redraw.
+pub(super) fn resize<T: EventListener>(
+    term: &mut Term<T>,
+    size: TermSize,
+    shell_redraws: bool,
+) -> bool {
     // Rows alone reflow nothing, and the alternate screen is a full-screen
     // program's, which repaints the whole of it.
     let reflows = size.cols.max(MIN_COLUMNS) != term.columns();
     if !shell_redraws || !reflows || term.mode().contains(TermMode::ALT_SCREEN) {
         term.resize(size);
-        return;
+        return false;
     }
 
     let cursor = term.grid().cursor.point;
@@ -73,6 +78,7 @@ pub(super) fn resize<T: EventListener>(term: &mut Term<T>, size: TermSize, shell
     }
     let last = Column(term.columns() - 1);
     term.grid_mut().cursor.point.column = cursor.column.min(last);
+    true
 }
 
 #[cfg(test)]
