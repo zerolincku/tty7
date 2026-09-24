@@ -18,7 +18,7 @@ use crate::core::osc::OscTokenizer;
 use crate::core::term_modes::TerminalModes;
 use crate::daemon::protocol::{
     AuthResponse, DaemonMsg, MAX_FRAME, NativeSshSpec, PaneInfo, RemoteContext, RemoteKind,
-    ShellSpec, WinSize,
+    ShellSpec, SshPhase, WinSize,
 };
 use crate::daemon::shell_integration;
 
@@ -714,6 +714,7 @@ struct PaneState {
     /// `shell` above, which is the shell-integration state.
     shell_spec: Option<ShellSpec>,
     remote: Option<RemoteContext>,
+    ssh_phase: Option<SshPhase>,
     agent: Option<crate::core::cli_agent::CLIAgent>,
     agent_argv: Option<Vec<String>>,
     agent_session: Option<crate::core::cli_agent::AgentSessionState>,
@@ -1584,6 +1585,7 @@ impl DaemonPane {
                 osc_title: restored_title,
                 shell: ShellState::default(),
                 remote_prompt_seen: false,
+                ssh_phase: None,
                 modes: TerminalModes::default(),
                 shell_spec: spawn.shell.clone(),
                 remote: spawn.remote.clone(),
@@ -1814,6 +1816,7 @@ impl DaemonPane {
                     mark_at_prompt: false,
                 },
                 remote_prompt_seen: false,
+                ssh_phase: None,
                 modes: TerminalModes::default(),
                 remote: carried.remote,
                 agent: carried.agent,
@@ -1868,6 +1871,7 @@ impl DaemonPane {
             osc_title: None,
             shell: ShellState::default(),
             remote_prompt_seen: false,
+            ssh_phase: None,
             modes: TerminalModes::default(),
             remote: Some(remote),
             agent: None,
@@ -1882,10 +1886,8 @@ impl DaemonPane {
         let broker = {
             let state = state.clone();
             crate::daemon::ssh::PromptBroker::new(Box::new(move |msg: DaemonMsg| {
-                match &state.lock().unwrap().subscriber {
-                    Some(sub) => sub.send(msg).is_ok(),
-                    None => false,
-                }
+                let mut state = state.lock().unwrap();
+                forward_ssh_status(&mut state, msg)
             }))
         };
 
@@ -2809,6 +2811,18 @@ fn record_output(st: &mut PaneState, bytes: &[u8]) {
     st.modes.feed(bytes);
 }
 
+// Retain status even with no GUI attached, so a later attachment receives
+// the current phase rather than waiting for another connection transition.
+fn forward_ssh_status(state: &mut PaneState, msg: DaemonMsg) -> bool {
+    if let DaemonMsg::SshStatus { phase } = &msg {
+        state.ssh_phase = Some(phase.clone());
+    }
+    state
+        .subscriber
+        .as_ref()
+        .is_some_and(|sub| sub.send(msg).is_ok())
+}
+
 /// Everything a client needs to rebuild the pane's screen and status, in the
 /// order it has to be applied.
 ///
@@ -2844,6 +2858,11 @@ fn replay_state(st: &PaneState, subscriber: &Sender<DaemonMsg>, foreground_comma
     }
     if st.remote.is_some() {
         let _ = subscriber.send(DaemonMsg::RemoteContext(st.remote.clone()));
+    }
+    if let Some(phase) = &st.ssh_phase {
+        let _ = subscriber.send(DaemonMsg::SshStatus {
+            phase: phase.clone(),
+        });
     }
     if st.agent.is_some() {
         let _ = subscriber.send(DaemonMsg::Agent(st.agent));
@@ -5132,6 +5151,7 @@ mod tests {
             osc_title: None,
             shell: ShellState::default(),
             remote_prompt_seen: false,
+            ssh_phase: None,
             modes: TerminalModes::default(),
             remote: None,
             agent: None,
@@ -5140,6 +5160,43 @@ mod tests {
             alive,
             exit_code: None,
         }
+    }
+
+    #[test]
+    fn ssh_status_survives_detached_gui_and_replays_on_every_attach() {
+        let mut state = test_state(true);
+        assert!(!forward_ssh_status(
+            &mut state,
+            DaemonMsg::SshStatus {
+                phase: SshPhase::Connected
+            }
+        ));
+        for _ in 0..2 {
+            let (tx, rx) = std::sync::mpsc::channel();
+            replay_state(&state, &tx, false);
+            assert!(rx.try_iter().any(|msg| matches!(
+                msg,
+                DaemonMsg::SshStatus {
+                    phase: SshPhase::Connected
+                }
+            )));
+        }
+        forward_ssh_status(
+            &mut state,
+            DaemonMsg::SshStatus {
+                phase: SshPhase::Authenticating,
+            },
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        replay_state(&state, &tx, false);
+        let phases: Vec<_> = rx
+            .try_iter()
+            .filter_map(|msg| match msg {
+                DaemonMsg::SshStatus { phase } => Some(phase),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(phases, vec![SshPhase::Authenticating]);
     }
 
     #[test]

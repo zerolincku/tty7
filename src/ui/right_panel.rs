@@ -1795,16 +1795,17 @@ impl Tty7App {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<(u64, String)> {
-        use crate::daemon::protocol::{RemoteKind, SshPhase};
+        use crate::daemon::protocol::RemoteKind;
         let leaf = self.tabs.get(self.active)?.detail_pane(window, cx)?;
         let view = leaf.read(cx);
-        let remote = view.remote_context()?;
-        if remote.kind != RemoteKind::NativeSsh
-            || !matches!(view.ssh_phase(), Some(SshPhase::Connected))
-        {
-            return None;
+        // Identity selects the filesystem; connection readiness only affects
+        // the SFTP result. Older daemons do not replay SshStatus on attach.
+        if let Some(spec) = view.ssh_spec() {
+            let host = view.ssh_tab_name(cx).unwrap_or(spec.host.clone());
+            return Some((view.pane_id, host));
         }
-        Some((view.pane_id, remote.target))
+        let remote = view.remote_context()?;
+        (remote.kind == RemoteKind::NativeSsh).then_some((view.pane_id, remote.target))
     }
 }
 
@@ -1882,6 +1883,30 @@ fn compact_path(path: &std::path::Path, home: Option<&std::path::Path>) -> Strin
 mod tests {
     use super::{InfoRow, InfoValue, format_rtt, forwards_port};
     use crate::daemon::protocol::{ForwardStatus, ManagedForward, SshForwardKind};
+
+    #[gpui::test]
+    fn restored_ssh_files_do_not_fall_back_to_local_without_status(cx: &mut gpui::TestAppContext) {
+        use crate::ui::app::{Tab, test_window::harness};
+        use crate::ui::pane::{Pane, PaneSlot};
+        let (app, mut vcx) = harness(cx);
+        let _streams = app.update_in(&mut vcx, |app, window, cx| {
+            let (ssh, ssh_stream) = crate::terminal::view::quiet_test_ssh_pane(7, window, cx);
+            let (local, local_stream) = crate::terminal::view::quiet_test_pane(8, window, cx);
+            assert!(ssh.read(cx).ssh_phase().is_none());
+            app.tabs = vec![
+                Tab::new(Pane::leaf(PaneSlot::Ready(ssh))),
+                Tab::new(Pane::leaf(PaneSlot::Ready(local))),
+            ];
+            app.active = 0;
+            assert_eq!(
+                app.remote_files_pane(window, cx),
+                Some((7, "build-box".into()))
+            );
+            app.active = 1;
+            assert_eq!(app.remote_files_pane(window, cx), None);
+            (ssh_stream, local_stream)
+        });
+    }
 
     fn forward(kind: SshForwardKind, target_host: &str, target_port: u16) -> ManagedForward {
         ManagedForward {

@@ -580,9 +580,9 @@ pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
     if let Some(window) = window.as_deref_mut() {
         let appearance = resolved_background_appearance(backdrop, blur);
         if take_appearance_change(window, appearance, cx) {
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(any(not(target_os = "macos"), test))]
             window.set_background_appearance(appearance);
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", not(test)))]
             {
                 // Use a standard AppKit material. GPUI's custom BlurredView
                 // strips private effect layers, which can remove blur on newer macOS.
@@ -1216,7 +1216,7 @@ mod tests {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(test)))]
 fn set_macos_blur(window: &Window, enabled: bool) {
     use objc2::{class, msg_send, runtime::AnyObject};
     use objc2_foundation::{NSRect, ns_string};
