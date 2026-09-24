@@ -9144,6 +9144,12 @@ fn session_to_pane(
                     return None;
                 }
             };
+            if let PaneSlot::Ready(terminal) = &view
+                && terminal.read(cx).restored()
+                && let Some(spec) = ssh_spec
+            {
+                terminal.update(cx, |view, _| view.restore_ssh_spec(spec));
+            }
             match &view {
                 PaneSlot::Ready(terminal) if !terminal.read(cx).restored() => {
                     if let Some(cmd) = agent_resume_command(

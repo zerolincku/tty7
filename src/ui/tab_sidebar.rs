@@ -959,7 +959,9 @@ impl Tty7App {
                         row.child(
                             h_flex()
                                 .absolute()
-                                .top(px(4.))
+                                .top_0()
+                                .bottom_0()
+                                .items_center()
                                 .right(px(6.))
                                 .opacity(0.)
                                 .group_hover(SharedString::from(format!("tab-row-{i}")), |s| {

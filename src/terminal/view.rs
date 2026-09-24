@@ -1386,7 +1386,27 @@ impl TerminalView {
         view.owner_workspace = parts.owner;
         view.restored = parts.restored;
         view.set_workspace(parts.workspace);
+        if view.restored {
+            let spec = crate::ui::machine_mirror::MachineMirrors::machine(cx, view.host_id)
+                .and_then(|machine| machine.panes.iter().find(|pane| pane.id == view.pane_id))
+                .and_then(|pane| pane.ssh_spec.clone());
+            if let Some(spec) = spec {
+                view.restore_ssh_spec(&spec);
+            }
+        }
         view
+    }
+
+    pub(crate) fn restore_ssh_spec(&mut self, spec: &crate::daemon::protocol::NativeSshSpec) {
+        if let Some(name) = spec
+            .display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        {
+            self.default_title = name.to_owned();
+        }
+        self.ssh_spec = Some(Box::new(spec.without_secrets()));
     }
 
     pub(crate) fn restored(&self) -> bool {
@@ -11771,6 +11791,62 @@ mod gpui_tests {
         settle(cx);
         window
             .update(cx, |view, _, _| assert_eq!(view.title, "wget 99%"))
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn reattached_ssh_pane_restores_host_identity_on_each_restart(cx: &mut TestAppContext) {
+        use crate::ui::machine_mirror::MachineMirrors;
+        use tty7_core::core::machine::{Machine, PaneRecord};
+
+        let (window, _daemon) = harness(cx);
+        window
+            .update(cx, |_, window, cx| {
+                let profile = crate::core::ssh_profile::SshProfile::new("dev_158");
+                let mut spec: crate::daemon::protocol::NativeSshSpec = serde_json::from_str(
+                    r#"{"host":"build-box","port":22,"user":"me","auth_mode":"auto"}"#,
+                )
+                .unwrap();
+                spec.profile_id = Some(profile.id.to_string());
+                spec.display_name = Some("dev_158".into());
+                cx.global_mut::<Config>().ssh_profiles.push(profile);
+                let mut record = PaneRecord::new(7);
+                record.ssh_spec = Some(Box::new(spec));
+                MachineMirrors::install(
+                    cx,
+                    crate::ui::host_ops::HostId::LOCAL,
+                    Machine {
+                        panes: vec![record],
+                        ..Default::default()
+                    },
+                );
+                for _ in 0..2 {
+                    let (client, _server) = test_stream_pair();
+                    let terminal =
+                        RemoteTerminal::from_stream_reattached(client, TermSize::new(80, 24))
+                            .unwrap();
+                    let pane = cx.new(|cx| {
+                        TerminalView::from_shell_parts(
+                            ShellParts {
+                                terminal,
+                                pane_id: 7,
+                                shell_spec: None,
+                                workspace: None,
+                                restored: true,
+                                owner: None,
+                            },
+                            window,
+                            cx,
+                        )
+                    });
+                    pane.update(cx, |view, cx| {
+                        view.title = "~".into();
+                        assert_eq!(view.ssh_tab_name(cx).as_deref(), Some("dev_158"));
+                        assert!(view.ssh_spec().is_some());
+                        assert_eq!(view.default_title, "dev_158");
+                    });
+                }
+            })
             .unwrap();
     }
 
