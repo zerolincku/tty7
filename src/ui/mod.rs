@@ -10,6 +10,7 @@ pub mod file_tree;
 pub mod forwards;
 pub mod hints;
 pub mod home;
+pub mod host_overview;
 #[allow(dead_code)]
 pub mod host_ops;
 #[allow(dead_code)]

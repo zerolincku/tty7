@@ -8091,6 +8091,7 @@ impl Render for Tty7App {
         // Keeps looking for new listening ports on the pane in front, panel
         // open or not — a port that appears while the panel is shut is exactly
         // the one worth forwarding unasked.
+        self.sync_host_overview(window, cx);
         self.sync_port_watch(window, cx);
         if cx.has_active_drag() {
             crate::ui::reorder::clear_pending(&self.reorder);

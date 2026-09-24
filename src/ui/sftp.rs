@@ -79,6 +79,21 @@ impl SftpRoute {
         RemoteTerminal::workspace_request(self.workspace.as_ref()?, self.pane_id, op)
     }
 
+    pub(crate) fn host_info(
+        &self,
+        full: bool,
+    ) -> Result<crate::daemon::ssh::host_info::HostInfo, String> {
+        let Some(req) = self.workspace_op(crate::daemon::protocol::WorkspaceOp::HostInfo { full })
+        else {
+            return RemoteTerminal::query_host_info(self.pane_id, full);
+        };
+        match RemoteTerminal::on_workspace(req) {
+            Ok(crate::daemon::protocol::DaemonMsg::HostInfo(info)) => Ok(info),
+            Ok(crate::daemon::protocol::DaemonMsg::Error(e)) => Err(e),
+            _ => Err("host information unavailable".into()),
+        }
+    }
+
     pub(crate) fn list(&self, path: &str) -> Result<Vec<SftpEntry>, String> {
         let Some(req) = self.workspace_op(crate::daemon::protocol::WorkspaceOp::SftpList {
             path: path.to_string(),

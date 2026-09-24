@@ -171,6 +171,9 @@ pub struct WorkspaceRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkspaceOp {
+    HostInfo {
+        full: bool,
+    },
     EnsureLoopback {
         remote_host: String,
         remote_port: u16,
@@ -895,6 +898,10 @@ pub enum ClientMsg {
     ListForwards {
         pane_id: u64,
     },
+    QueryHostInfo {
+        pane_id: u64,
+        full: bool,
+    },
     QueryProcs {
         pane_id: u64,
     },
@@ -958,6 +965,7 @@ pub enum DaemonMsg {
     },
     SftpTransferProgress(Vec<SftpJobProgress>),
     ForwardList(Vec<ManagedForward>),
+    HostInfo(super::ssh::host_info::HostInfo),
     Procs(PaneProcs),
     Version(DaemonVersion),
     Error(String),
@@ -988,6 +996,7 @@ mod kind {
     pub const REMOVE_FORWARD: u8 = 21;
     pub const LIST_FORWARDS: u8 = 22;
     pub const VERSION: u8 = 40;
+    pub const HOST_INFO: u8 = 57;
     pub const QUERY_PROCS: u8 = 50;
     pub const ON_WORKSPACE: u8 = 52;
     pub const SPAWN_OWNED: u8 = 53;
@@ -1260,6 +1269,9 @@ impl ClientMsg {
                 pane_id,
                 forward_id,
             } => write_frame(w, kind::REMOVE_FORWARD, &to_json(&(pane_id, forward_id))?),
+            ClientMsg::QueryHostInfo { pane_id, full } => {
+                write_frame(w, kind::HOST_INFO, &to_json(&(pane_id, full))?)
+            }
             ClientMsg::QueryProcs { pane_id } => {
                 write_frame(w, kind::QUERY_PROCS, &to_json(pane_id)?)
             }
@@ -1376,6 +1388,10 @@ impl ClientMsg {
             kind::SFTP_TRANSFER_LIST => ClientMsg::SftpTransferList {
                 pane_id: from_json(&payload)?,
             },
+            kind::HOST_INFO => {
+                let (pane_id, full) = from_json(&payload)?;
+                ClientMsg::QueryHostInfo { pane_id, full }
+            }
             kind::QUERY_PROCS => ClientMsg::QueryProcs {
                 pane_id: from_json(&payload)?,
             },
@@ -1460,6 +1476,7 @@ impl DaemonMsg {
                 write_frame(w, kind::SFTP_TRANSFER_PROGRESS, &to_json(jobs)?)
             }
             DaemonMsg::ForwardList(list) => write_frame(w, kind::FORWARD_LIST, &to_json(list)?),
+            DaemonMsg::HostInfo(info) => write_frame(w, kind::HOST_INFO, &to_json(info)?),
             DaemonMsg::Procs(procs) => write_frame(w, kind::PROCS, &to_json(procs)?),
             DaemonMsg::Version(version) => write_frame(w, kind::VERSION_REPLY, &to_json(version)?),
             DaemonMsg::Error(msg) => write_frame(w, kind::ERROR, &to_json(msg)?),
@@ -1513,6 +1530,7 @@ impl DaemonMsg {
             },
             kind::SFTP_TRANSFER_PROGRESS => DaemonMsg::SftpTransferProgress(from_json(&payload)?),
             kind::FORWARD_LIST => DaemonMsg::ForwardList(from_json(&payload)?),
+            kind::HOST_INFO => DaemonMsg::HostInfo(from_json(&payload)?),
             kind::PROCS => DaemonMsg::Procs(from_json(&payload)?),
             kind::VERSION_REPLY => DaemonMsg::Version(from_json(&payload)?),
             kind::ERROR => DaemonMsg::Error(from_json(&payload)?),
@@ -1609,6 +1627,14 @@ mod tests {
     #[test]
     fn client_roundtrip() {
         let msgs = vec![
+            ClientMsg::QueryHostInfo {
+                pane_id: 7,
+                full: true,
+            },
+            ClientMsg::QueryHostInfo {
+                pane_id: 8,
+                full: false,
+            },
             ClientMsg::Spawn {
                 cwd: Some(PathBuf::from("/tmp/x")),
                 size: SIZE,
@@ -1791,6 +1817,7 @@ mod tests {
     #[test]
     fn daemon_roundtrip() {
         let msgs = vec![
+            DaemonMsg::HostInfo(super::super::ssh::host_info::HostInfo::default()),
             DaemonMsg::Spawned { pane_id: 1 },
             DaemonMsg::Size(SIZE),
             DaemonMsg::Snapshot(vec![1, 2, 3, 0, 255]),

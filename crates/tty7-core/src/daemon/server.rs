@@ -956,6 +956,18 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
             Ok(())
         }
 
+        ClientMsg::QueryHostInfo { pane_id, full } => {
+            let result = ssh_connection_for(&registry, pane_id)
+                .and_then(|conn| crate::daemon::ssh::host_info::collect(&conn, full));
+            let msg = match result {
+                Ok(info) => DaemonMsg::HostInfo(info),
+                Err(e) => DaemonMsg::Error(e),
+            };
+            let mut w = write_stream;
+            msg.encode(&mut w)?;
+            Ok(())
+        }
+
         ClientMsg::SftpList { pane_id, path } => {
             let mut w = write_stream;
             match ssh_connection_for(&registry, pane_id) {

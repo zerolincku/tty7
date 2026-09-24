@@ -20,6 +20,10 @@ pub fn handle(req: &WorkspaceRequest) -> DaemonMsg {
     let view = req.view_pane;
 
     match &req.op {
+        WorkspaceOp::HostInfo { full } => match super::host_info::collect(&conn, *full) {
+            Ok(info) => DaemonMsg::HostInfo(info),
+            Err(e) => DaemonMsg::Error(e),
+        },
         WorkspaceOp::EnsureLoopback {
             remote_host,
             remote_port,

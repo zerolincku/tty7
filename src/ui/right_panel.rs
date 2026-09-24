@@ -1,3 +1,4 @@
+use gpui_component::button::ButtonVariants as _;
 use gpui::{AnyElement, Context, Window, div, prelude::*, px, rems};
 use gpui_component::button::Button;
 use gpui_component::input::Input;
@@ -145,6 +146,7 @@ pub(crate) const SEARCH_H: f32 = 30.;
 
 #[derive(Default)]
 pub(crate) struct RightPanelState {
+    pub(crate) overview: super::host_overview::OverviewState,
     pub(crate) procs_pane: Option<u64>,
     pub(crate) procs: Option<PaneProcs>,
     pub(crate) procs_loading: bool,
@@ -857,7 +859,29 @@ impl Tty7App {
             .child(self.panel_subtitle(t(L10nKey::PanelSessionSubtitle), false, None, cx))
             .child(list)
             .children(self.procs_section(pane_id, cx))
-            .children(self.ports_section(ctx.as_ref(), cx))
+            .children(self.render_host_overview(cx))
+            .child(
+                Button::new("host-ports-toggle")
+                    .ghost()
+                    .small()
+                    .label(format!(
+                        "{} {}",
+                        if self.right_panel.overview.ports_open {
+                            "▾"
+                        } else {
+                            "▸"
+                        },
+                        t(L10nKey::HostPorts)
+                    ))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.right_panel.overview.ports_open =
+                            !this.right_panel.overview.ports_open;
+                        cx.notify();
+                    })),
+            )
+            .when(self.right_panel.overview.ports_open, |el| {
+                el.children(self.ports_section(ctx.as_ref(), cx))
+            })
             .into_any_element();
         self.panel_scroll(inner, title)
     }
@@ -1043,6 +1067,8 @@ impl Tty7App {
             .px(px(ROW_INSET))
             .py(px(4.))
             .rounded(crate::ui::rounding::ROW_RADIUS)
+            .font_family(cx.theme().font_family.clone())
+            .font_weight(gpui::FontWeight::NORMAL)
             .text_size(rems(TEXT))
             // Only rows that can do something light up, so the fill is never a
             // promise the row cannot keep.

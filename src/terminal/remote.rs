@@ -2380,6 +2380,25 @@ impl RemoteTerminal {
         })
     }
 
+    pub fn query_host_info(
+        pane_id: u64,
+        full: bool,
+    ) -> Result<crate::daemon::ssh::host_info::HostInfo, String> {
+        let query = || -> anyhow::Result<_> {
+            let mut stream = connect()?;
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(25)))?;
+            ClientMsg::QueryHostInfo { pane_id, full }.encode(&mut stream)?;
+            match DaemonMsg::read(&mut stream)? {
+                DaemonMsg::HostInfo(info) => Ok(info),
+                DaemonMsg::Error(e) => Err(anyhow::anyhow!(e)),
+                _ => Err(anyhow::anyhow!(
+                    "host information unavailable; restart the background service"
+                )),
+            }
+        };
+        query().map_err(|e| e.to_string())
+    }
+
     pub fn query_procs(pane_id: u64) -> PaneProcs {
         fn query(pane_id: u64) -> anyhow::Result<PaneProcs> {
             let mut stream = connect()?;
