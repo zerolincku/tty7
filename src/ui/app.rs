@@ -8826,6 +8826,7 @@ impl Render for Tty7App {
                 })
                 .children(self.render_switcher(window, cx))
                 .when_some(self.palette.clone(), |this, palette| this.child(palette))
+                .children(gpui_component::Root::render_dialog_layer(window, cx))
                 .children(gpui_component::Root::render_notification_layer(window, cx));
 
         if let Some(start) = prof {

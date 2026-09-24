@@ -217,7 +217,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsInheritedByEveryHost => "Inherited by every host",
         L10nKey::SettingsNoSavedHosts => "No saved hosts yet.",
         L10nKey::SettingsNothingMatches => "Nothing matches {query}.",
-        L10nKey::SettingsInTty7 => "In tty7",
+        L10nKey::SettingsDefaultSshGroup => "Default Group",
         L10nKey::SettingsImportFromSshConfig => "Import from ~/.ssh/config",
         L10nKey::SettingsExpandAllGroups => "Expand All Groups",
         L10nKey::SettingsNoHostsYet => "No hosts yet",
@@ -246,6 +246,31 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsDefaultsIntro => {
             "Every host starts from these. Any host can override one under its own Advanced."
         }
+        L10nKey::SettingsShareConnection => "Share Connection Info",
+        L10nKey::SettingsShareMissingPassword => {
+            "No login password is saved. Enter one to share, or copy key-based connection details."
+        }
+        L10nKey::SettingsShareOnce => "Copy Once",
+        L10nKey::SettingsShareSave => "Save Password and Copy",
+        L10nKey::SettingsShareKey => "Copy Key Login Info",
+        L10nKey::SettingsShareCopied => "Connection info copied, including the plaintext password.",
+        L10nKey::SettingsShareKeyCopied => {
+            "Key login info copied; no password or private key included."
+        }
+        L10nKey::SettingsShareError => "Could not share connection info: {error}",
+        L10nKey::SettingsSharePasswordRequired => "Enter a login password first.",
+        L10nKey::SettingsShareText => {
+            "Name: {name}\nAddress: {host}\nPort: {port}\nUsername: {user}\nPassword: {password}"
+        }
+        L10nKey::SettingsShareKeyText => {
+            "Name: {name}\nAddress: {host}\nPort: {port}\nUsername: {user}\nAuthentication: SSH key"
+        }
+        L10nKey::SettingsCreateSshGroup => "Create Group…",
+        L10nKey::SettingsMoveSshGroup => "Move to Group…",
+        L10nKey::SettingsSshGroup => "Group",
+        L10nKey::SettingsSshGroupName => "Group name",
+        L10nKey::SettingsSshGroupInvalid => "Enter a unique group name.",
+        L10nKey::SettingsCreateSshGroupAction => "Create Group",
         L10nKey::SettingsCopyAddress => "Copy Address",
         L10nKey::SettingsDuplicate => "Duplicate",
         L10nKey::SettingsForgetPassword => "Forget Password",

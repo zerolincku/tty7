@@ -219,7 +219,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsInheritedByEveryHost => "すべてのホストに継承されます",
         L10nKey::SettingsNoSavedHosts => "保存済みホストはまだありません",
         L10nKey::SettingsNothingMatches => "「{query}」に一致する項目がありません",
-        L10nKey::SettingsInTty7 => "tty7 内",
+        L10nKey::SettingsDefaultSshGroup => "デフォルトグループ",
         L10nKey::SettingsImportFromSshConfig => "~/.ssh/config からインポート",
         L10nKey::SettingsExpandAllGroups => "すべてのグループを展開",
         L10nKey::SettingsNoHostsYet => "まだホストがありません",
@@ -250,6 +250,31 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsDefaultsIntro => {
             "すべてのホストはこの設定から始まります。各ホストは詳細設定で個別に上書きできます"
         }
+        L10nKey::SettingsShareConnection => "接続情報を共有",
+        L10nKey::SettingsShareMissingPassword => {
+            "ログインパスワードが未保存です。入力するか、鍵認証の接続情報をコピーしてください。"
+        }
+        L10nKey::SettingsShareOnce => "今回のみコピー",
+        L10nKey::SettingsShareSave => "パスワードを保存してコピー",
+        L10nKey::SettingsShareKey => "鍵認証情報をコピー",
+        L10nKey::SettingsShareCopied => "平文パスワードを含む接続情報をコピーしました。",
+        L10nKey::SettingsShareKeyCopied => {
+            "鍵認証情報をコピーしました。パスワードや秘密鍵は含まれません。"
+        }
+        L10nKey::SettingsShareError => "接続情報を共有できません：{error}",
+        L10nKey::SettingsSharePasswordRequired => "ログインパスワードを入力してください。",
+        L10nKey::SettingsShareText => {
+            "名前：{name}\nアドレス：{host}\nポート：{port}\nユーザー名：{user}\nパスワード：{password}"
+        }
+        L10nKey::SettingsShareKeyText => {
+            "名前：{name}\nアドレス：{host}\nポート：{port}\nユーザー名：{user}\n認証方式：SSH 鍵"
+        }
+        L10nKey::SettingsCreateSshGroup => "グループを作成…",
+        L10nKey::SettingsMoveSshGroup => "グループに移動…",
+        L10nKey::SettingsSshGroup => "グループ",
+        L10nKey::SettingsSshGroupName => "グループ名",
+        L10nKey::SettingsSshGroupInvalid => "重複しないグループ名を入力してください。",
+        L10nKey::SettingsCreateSshGroupAction => "グループを作成",
         L10nKey::SettingsCopyAddress => "アドレスをコピー",
         L10nKey::SettingsDuplicate => "複製",
         L10nKey::SettingsForgetPassword => "パスワードを消去",

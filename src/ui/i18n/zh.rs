@@ -199,7 +199,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsInheritedByEveryHost => "对所有主机生效",
         L10nKey::SettingsNoSavedHosts => "还没有保存的主机。",
         L10nKey::SettingsNothingMatches => "没有匹配 {query} 的内容。",
-        L10nKey::SettingsInTty7 => "在 tty7 中",
+        L10nKey::SettingsDefaultSshGroup => "默认分组",
         L10nKey::SettingsImportFromSshConfig => "从 ~/.ssh/config 导入",
         L10nKey::SettingsExpandAllGroups => "展开所有分组",
         L10nKey::SettingsNoHostsYet => "还没有主机",
@@ -224,6 +224,29 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsDefaultsIntro => {
             "所有主机都从这些设置开始。每个主机都可以在自己的高级选项中覆盖某项。"
         }
+        L10nKey::SettingsShareConnection => "分享连接信息",
+        L10nKey::SettingsShareMissingPassword => {
+            "尚未保存登录密码。输入密码后分享，或复制密钥登录信息。"
+        }
+        L10nKey::SettingsShareOnce => "仅此次复制",
+        L10nKey::SettingsShareSave => "保存密码并复制",
+        L10nKey::SettingsShareKey => "复制密钥登录信息",
+        L10nKey::SettingsShareCopied => "连接信息已复制，包含明文密码。",
+        L10nKey::SettingsShareKeyCopied => "密钥登录信息已复制，不含密码或私钥。",
+        L10nKey::SettingsShareError => "无法分享连接信息：{error}",
+        L10nKey::SettingsSharePasswordRequired => "请先输入登录密码。",
+        L10nKey::SettingsShareText => {
+            "名称：{name}\n地址：{host}\n端口：{port}\n用户名：{user}\n密码：{password}"
+        }
+        L10nKey::SettingsShareKeyText => {
+            "名称：{name}\n地址：{host}\n端口：{port}\n用户名：{user}\n认证方式：SSH 密钥"
+        }
+        L10nKey::SettingsCreateSshGroup => "创建分组…",
+        L10nKey::SettingsMoveSshGroup => "移动到分组…",
+        L10nKey::SettingsSshGroup => "分组",
+        L10nKey::SettingsSshGroupName => "分组名称",
+        L10nKey::SettingsSshGroupInvalid => "请输入不重复的分组名称。",
+        L10nKey::SettingsCreateSshGroupAction => "创建分组",
         L10nKey::SettingsCopyAddress => "复制地址",
         L10nKey::SettingsDuplicate => "复制",
         L10nKey::SettingsForgetPassword => "清除已保存的密码",

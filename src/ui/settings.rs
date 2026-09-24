@@ -1361,7 +1361,7 @@ fn ssh_group_key(p: &SshProfile) -> &str {
 fn ssh_group_label(key: &str) -> &str {
     match key {
         crate::core::ssh_config::IMPORTED_GROUP => "~/.ssh/config",
-        "" => t(L10nKey::SettingsInTty7),
+        "" => t(L10nKey::SettingsDefaultSshGroup),
         other => other,
     }
 }
@@ -2096,6 +2096,54 @@ fn tildify_with(path: &str, home: Option<&str>) -> String {
 /// its own. A hint, not a value — an empty field still means "try the usual
 /// `~/.ssh` keys", which is exactly what `default_identity_candidates` does.
 const DEFAULT_KEY_HINT: &str = "~/.ssh/id_ed25519";
+
+fn shared_connection_text(profile: &SshProfile, password: Option<&str>) -> String {
+    let template = t(if password.is_some() {
+        L10nKey::SettingsShareText
+    } else {
+        L10nKey::SettingsShareKeyText
+    });
+    let port = profile.port.to_string();
+    let values = [
+        ("name", profile.name.as_str()),
+        ("host", profile.host.as_str()),
+        ("port", port.as_str()),
+        ("user", profile.user.as_str()),
+        ("password", password.unwrap_or_default()),
+    ];
+    // Substitute only tokens in the template, never inside a field or secret.
+    let mut text = String::new();
+    for part in template.split_inclusive('}') {
+        if let Some((prefix, key)) = part.rsplit_once('{')
+            && let Some(key) = key.strip_suffix('}')
+            && let Some((_, value)) = values.iter().find(|(name, _)| *name == key)
+        {
+            text.push_str(prefix);
+            text.push_str(value);
+        } else {
+            text.push_str(part);
+        }
+    }
+    text
+}
+
+fn copy_shared_connection(
+    profile: &SshProfile,
+    password: Option<&str>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let text = shared_connection_text(profile, password);
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+    window.push_notification(
+        t(if password.is_some() {
+            L10nKey::SettingsShareCopied
+        } else {
+            L10nKey::SettingsShareKeyCopied
+        }),
+        cx,
+    );
+}
 
 /// The password the keychain holds for this profile's endpoint, or nothing.
 ///
@@ -4160,6 +4208,13 @@ impl Tty7App {
                 None => groups.push((key, vec![p.clone()])),
             }
         }
+        for group in &cx.global::<Config>().ssh_groups {
+            if (query.is_empty() || group.to_lowercase().contains(&query))
+                && !groups.iter().any(|(key, _)| key == group)
+            {
+                groups.push((group.clone(), Vec::new()));
+            }
+        }
         groups.sort_by(|a, b| {
             ssh_group_rank(&a.0)
                 .cmp(&ssh_group_rank(&b.0))
@@ -4236,6 +4291,14 @@ impl Tty7App {
 
     fn ssh_master_menu(menu: PopupMenu, app: &gpui::WeakEntity<Self>) -> PopupMenu {
         menu.min_w(px(200.))
+            .item(
+                PopupMenuItem::new(t(L10nKey::SettingsCreateSshGroup)).on_click({
+                    let app = app.clone();
+                    move |_, window, cx| {
+                        let _ = app.update(cx, |this, cx| this.edit_ssh_group(None, window, cx));
+                    }
+                }),
+            )
             .item(
                 PopupMenuItem::new(t(L10nKey::SettingsImportFromSshConfig)).on_click({
                     let app = app.clone();
@@ -4711,6 +4774,24 @@ impl Tty7App {
                     let app = app.clone();
                     move |_, _window, cx| {
                         let _ = app.update(cx, |this, cx| this.copy_profile_connect_string(id, cx));
+                    }
+                }),
+            )
+            .item(
+                PopupMenuItem::new(t(L10nKey::SettingsShareConnection)).on_click({
+                    let app = app.clone();
+                    move |_, window, cx| {
+                        let _ = app
+                            .update(cx, |this, cx| this.share_profile_connection(id, window, cx));
+                    }
+                }),
+            )
+            .item(
+                PopupMenuItem::new(t(L10nKey::SettingsMoveSshGroup)).on_click({
+                    let app = app.clone();
+                    move |_, window, cx| {
+                        let _ =
+                            app.update(cx, |this, cx| this.edit_ssh_group(Some(id), window, cx));
                     }
                 }),
             )
@@ -5676,6 +5757,230 @@ impl Tty7App {
         }
     }
 
+    fn assign_ssh_group(&mut self, id: Uuid, group: Option<String>, cx: &mut Context<Self>) {
+        self.update_config(cx, |cfg| {
+            if let Some(profile) = cfg.ssh_profiles.iter_mut().find(|p| p.id == id) {
+                profile.group = group.clone();
+            }
+        });
+        // A currently open editor must not restore the old group on Save.
+        if let Some(form) = self.ssh_form_mut()
+            && form.editing == id
+        {
+            form.carry_group = group.clone();
+        }
+        if let Some(state) = self.active_settings_mut() {
+            state
+                .ssh_collapsed_groups
+                .remove(group.as_deref().unwrap_or(""));
+        }
+        cx.notify();
+    }
+
+    fn create_ssh_group(
+        &mut self,
+        name: String,
+        profile_id: Option<Uuid>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cfg = cx.global::<Config>();
+        if name.is_empty()
+            || name == crate::core::ssh_config::IMPORTED_GROUP
+            || name == "~/.ssh/config"
+            || name == t(L10nKey::SettingsDefaultSshGroup)
+            || cfg.ssh_groups.contains(&name)
+            || cfg
+                .ssh_profiles
+                .iter()
+                .any(|p| p.group.as_deref() == Some(&name))
+        {
+            window.push_notification(t(L10nKey::SettingsSshGroupInvalid), cx);
+            return;
+        }
+        self.update_config(cx, |cfg| cfg.ssh_groups.push(name.clone()));
+        if let Some(id) = profile_id {
+            self.assign_ssh_group(id, Some(name), cx);
+        }
+        cx.notify();
+        window.close_dialog(cx);
+    }
+
+    fn edit_ssh_group(
+        &mut self,
+        profile_id: Option<Uuid>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut groups = cx.global::<Config>().ssh_groups.clone();
+        groups.extend(
+            cx.global::<Config>()
+                .ssh_profiles
+                .iter()
+                .filter_map(|p| p.group.clone()),
+        );
+        groups.sort();
+        groups.dedup();
+        groups.retain(|g| !g.is_empty() && g != crate::core::ssh_config::IMPORTED_GROUP);
+        let input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t(L10nKey::SettingsSshGroupName)));
+        cx.subscribe_in(
+            &input,
+            window,
+            move |this, input, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    let name = input.read(cx).value().trim().to_string();
+                    this.create_ssh_group(name, profile_id, window, cx);
+                }
+            },
+        )
+        .detach();
+        let app = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let mut body = v_flex().gap_3();
+            if let Some(id) = profile_id {
+                let mut choices = h_flex().flex_wrap().gap_2();
+                for group in std::iter::once(None).chain(groups.iter().cloned().map(Some)) {
+                    let app = app.clone();
+                    let label = group
+                        .clone()
+                        .unwrap_or_else(|| t(L10nKey::SettingsDefaultSshGroup).to_owned());
+                    choices = choices.child(
+                        Button::new(SharedString::from(format!("move-group-{label}")))
+                            .label(label)
+                            .on_click(move |_, window, cx| {
+                                let _ = app.update(cx, |this, cx| {
+                                    this.assign_ssh_group(id, group.clone(), cx)
+                                });
+                                window.close_dialog(cx);
+                            }),
+                    );
+                }
+                body = body.child(choices);
+            }
+            let app = app.clone();
+            let input_action = input.clone();
+            body = body.child(Input::new(&input)).child(
+                Button::new("create-ssh-group")
+                    .label(t(L10nKey::SettingsCreateSshGroupAction))
+                    .on_click(move |_, window, cx| {
+                        let name = input_action.read(cx).value().trim().to_string();
+                        let _ = app.update(cx, |this, cx| {
+                            this.create_ssh_group(name, profile_id, window, cx);
+                        });
+                    }),
+            );
+            dialog
+                .on_ok(|_, _, _| false)
+                .title(t(if profile_id.is_some() {
+                    L10nKey::SettingsMoveSshGroup
+                } else {
+                    L10nKey::SettingsCreateSshGroup
+                }))
+                .w(px(500.))
+                .child(body)
+        });
+    }
+
+    fn share_profile_connection(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(profile) = cx
+            .global::<Config>()
+            .ssh_profiles
+            .iter()
+            .find(|p| p.id == id)
+            .cloned()
+        else {
+            return;
+        };
+        match OsCredentialStore.password_for(&profile.user, &profile.host, profile.port) {
+            Ok(Some(password)) if !password.is_empty() => {
+                copy_shared_connection(&profile, Some(&password), window, cx);
+            }
+            Err(error) => {
+                window.push_notification(
+                    t_fmt(
+                        L10nKey::SettingsShareError,
+                        &[("error", &error.to_string())],
+                    ),
+                    cx,
+                );
+            }
+            _ => {
+                let input = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .masked(true)
+                        .placeholder(t(L10nKey::SettingsPassword))
+                });
+                window.open_dialog(cx, move |dialog, _, _| {
+                    let mut buttons = h_flex().gap_2().justify_end();
+                    if matches!(
+                        profile.auth,
+                        AuthMode::PublicKey | AuthMode::Agent | AuthMode::Auto
+                    ) {
+                        let profile = profile.clone();
+                        buttons = buttons.child(
+                            Button::new("share-key")
+                                .label(t(L10nKey::SettingsShareKey))
+                                .on_click(move |_, window, cx| {
+                                    copy_shared_connection(&profile, None, window, cx);
+                                    window.close_dialog(cx);
+                                }),
+                        );
+                    }
+                    for (id, label, save) in [
+                        ("share-once", L10nKey::SettingsShareOnce, false),
+                        ("share-save", L10nKey::SettingsShareSave, true),
+                    ] {
+                        let input = input.clone();
+                        let profile = profile.clone();
+                        buttons = buttons.child(Button::new(id).label(t(label)).on_click(
+                            move |_, window, cx| {
+                                let password = input.read(cx).value().to_string();
+                                if password.is_empty() {
+                                    window.push_notification(
+                                        t(L10nKey::SettingsSharePasswordRequired),
+                                        cx,
+                                    );
+                                    return;
+                                }
+                                if save
+                                    && let Err(error) = OsCredentialStore.set_password(
+                                        &profile.user,
+                                        &profile.host,
+                                        profile.port,
+                                        &password,
+                                    )
+                                {
+                                    window.push_notification(
+                                        t_fmt(
+                                            L10nKey::SettingsShareError,
+                                            &[("error", &error.to_string())],
+                                        ),
+                                        cx,
+                                    );
+                                    return;
+                                }
+                                copy_shared_connection(&profile, Some(&password), window, cx);
+                                window.close_dialog(cx);
+                            },
+                        ));
+                    }
+                    dialog
+                        .on_ok(|_, _, _| false)
+                        .title(t(L10nKey::SettingsShareConnection))
+                        .w(px(580.))
+                        .child(
+                            v_flex()
+                                .gap_3()
+                                .child(t(L10nKey::SettingsShareMissingPassword))
+                                .child(Input::new(&input).mask_toggle())
+                                .child(buttons),
+                        )
+                });
+            }
+        }
+    }
+
     pub(crate) fn forget_profile_password(
         &mut self,
         id: Uuid,
@@ -5918,6 +6223,44 @@ impl Tty7App {
             .map(|e| field_error(e.message(), cx));
         let port_error = errors.port.as_ref().map(|e| field_error(e.message(), cx));
 
+        let mut groups = cx.global::<Config>().ssh_groups.clone();
+        groups.extend(
+            cx.global::<Config>()
+                .ssh_profiles
+                .iter()
+                .filter_map(|p| p.group.clone()),
+        );
+        groups.extend(form.carry_group.clone());
+        groups.sort();
+        groups.dedup();
+        groups.retain(|group| {
+            !group.is_empty()
+                && (group != crate::core::ssh_config::IMPORTED_GROUP
+                    || form.carry_group.as_deref() == Some(group.as_str()))
+        });
+        let group_app = cx.entity().downgrade();
+        let group_picker = Button::new("ssh-form-group")
+            .label(ssh_group_label(form.carry_group.as_deref().unwrap_or("")).to_owned())
+            .icon(Icon::new(IconName::ChevronDown))
+            .small()
+            .w_full()
+            .dropdown_menu_with_anchor(gpui::Anchor::TopLeft, move |menu, _, _| {
+                let mut menu = menu.min_w(px(200.));
+                for group in std::iter::once(None).chain(groups.iter().cloned().map(Some)) {
+                    let app = group_app.clone();
+                    let label = ssh_group_label(group.as_deref().unwrap_or("")).to_owned();
+                    menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                        let _ = app.update(cx, |this, cx| {
+                            if let Some(form) = this.ssh_form_mut() {
+                                form.carry_group = group.clone();
+                            }
+                            cx.notify();
+                        });
+                    }));
+                }
+                menu
+            });
+
         // Three fields whose labels say everything a sentence under them
         // would: what goes in them is shown in the box itself, as a hint that
         // gets out of the way the moment anything is typed.
@@ -5926,6 +6269,12 @@ impl Tty7App {
             .child(self.ssh_field_row(
                 t(L10nKey::SettingsName),
                 Input::new(&form.name).small().w_full().into_any_element(),
+                vec![],
+                cx,
+            ))
+            .child(self.ssh_field_row(
+                t(L10nKey::SettingsSshGroup),
+                group_picker.into_any_element(),
                 vec![],
                 cx,
             ))
@@ -9078,6 +9427,27 @@ impl Tty7App {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_connection_preserves_secrets_and_omits_them_for_key_login() {
+        crate::ui::i18n::set_locale("zh-CN");
+        let mut profile = super::SshProfile::new("test {password}");
+        profile.host = "192.0.2.1".into();
+        profile.user = "deploy".into();
+        profile.port = 2222;
+        let secret = "  p{host}\nword  ";
+        let text = super::shared_connection_text(&profile, Some(secret));
+        assert_eq!(
+            text,
+            format!(
+                "名称：test {{password}}\n地址：192.0.2.1\n端口：2222\n用户名：deploy\n密码：{secret}"
+            )
+        );
+        let text = super::shared_connection_text(&profile, None);
+        assert!(text.ends_with("认证方式：SSH 密钥"));
+        assert!(!text.contains(secret));
+        assert!(!text.contains("密码："));
+    }
+
     use super::*;
 
     #[test]
@@ -9955,7 +10325,7 @@ mod tests {
             ssh_group_label(crate::core::ssh_config::IMPORTED_GROUP),
             "~/.ssh/config"
         );
-        assert_eq!(ssh_group_label(""), "In tty7");
+        assert_eq!(ssh_group_label(""), "Default Group");
         assert_eq!(ssh_group_label("Work"), "Work");
     }
 

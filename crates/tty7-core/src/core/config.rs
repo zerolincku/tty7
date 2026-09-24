@@ -379,6 +379,8 @@ pub struct Config {
 
     #[serde(default)]
     pub ssh_profiles: Vec<crate::core::ssh_profile::SshProfile>,
+    #[serde(default)]
+    pub ssh_groups: Vec<String>,
     #[serde(default = "default_true")]
     pub verify_host_keys: bool,
     #[serde(default)]
@@ -712,6 +714,7 @@ impl Default for Config {
             working_directory: WorkingDirectory::default(),
             env: HashMap::new(),
             ssh_profiles: Vec::new(),
+            ssh_groups: Vec::new(),
             verify_host_keys: true,
             ssh_warn_on_close: false,
             ssh_profile_frecency: HashMap::new(),
