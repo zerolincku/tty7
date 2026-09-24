@@ -9849,6 +9849,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "percent-encoding",
  "plist",
+ "raw-window-handle",
  "regex",
  "reqwest_client",
  "resvg",

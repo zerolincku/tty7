@@ -184,10 +184,7 @@ pub(crate) fn window_background(bg: &presets::ActiveBackground) -> Background {
     window_background_with_alpha(bg, bg.opacity.unwrap_or(1.0))
 }
 
-/// The same preset fill with the alpha channel forced to 1 — used by the
-/// settings overlay, which must stay opaque (workspace translucency must
-/// never show through it) while still rendering the preset's gradient
-/// design instead of collapsing to a flat solid color.
+/// The same preset fill with alpha forced to 1 for document overlays.
 pub(crate) fn window_background_opaque(bg: &presets::ActiveBackground) -> Background {
     window_background_with_alpha(bg, 1.0)
 }
@@ -201,7 +198,7 @@ pub(crate) fn workspace_background(cx: &App) -> Background {
     }
 }
 
-/// The fill for a full-window overlay (settings, the opened file, the diff
+/// The fill for a full-window document overlay (the opened file, the diff
 /// view). Always opaque: the overlay covers the whole workspace, so window
 /// translucency and the backdrop material must stop at it instead of showing
 /// desktop through its text. Overlays pair this with
@@ -457,14 +454,9 @@ pub(crate) fn default_window_opacity(backdrop: WindowBackdrop, blur: bool) -> f3
     }
 }
 
-/// The fill for the workspace's large translucent surfaces (file sidebar,
-/// right panel, SFTP panel). While a material is active and the window is
-/// translucent, the surface paints on top of the already-alpha window
-/// background, so its own alpha stacks (src-over) and the material would
-/// show through far less than behind the terminal; a constant 0.15 keeps
-/// the backdrop ratio at ~85% of the terminal's at every opacity setting.
-/// `theme.sidebar` itself stays opaque — the settings theme picker paints
-/// with it on top of the opaque settings overlay and must stay legible.
+/// Large panels tint the shared window background without covering its
+/// transparency. A low alpha avoids stacking another opaque surface over it.
+/// Theme tokens stay opaque for small controls and floating menus.
 pub(crate) fn workspace_surface_color(cx: &App) -> Hsla {
     let base: Hsla = cx.theme().sidebar;
     let translucent = cx
@@ -474,14 +466,7 @@ pub(crate) fn workspace_surface_color(cx: &App) -> Hsla {
     if !translucent {
         return base;
     }
-    let config = cx.global::<Config>();
-    let theme = presets::by_id(cx, &effective_preset_id(cx));
-    let blur = config.window_blur.unwrap_or(theme.blur);
-    if material_active(config.window_backdrop, blur) {
-        base.alpha(0.15)
-    } else {
-        base
-    }
+    base.alpha(0.15)
 }
 
 /// The backdrop presets offered in the settings dropdown: everything the
@@ -595,7 +580,15 @@ pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
     if let Some(window) = window.as_deref_mut() {
         let appearance = resolved_background_appearance(backdrop, blur);
         if take_appearance_change(window, appearance, cx) {
+            #[cfg(not(target_os = "macos"))]
             window.set_background_appearance(appearance);
+            #[cfg(target_os = "macos")]
+            {
+                // Use a standard AppKit material. GPUI's custom BlurredView
+                // strips private effect layers, which can remove blur on newer macOS.
+                window.set_background_appearance(WindowBackgroundAppearance::Transparent);
+                set_macos_blur(window, appearance == WindowBackgroundAppearance::Blurred);
+            }
         }
     }
 
@@ -1220,5 +1213,67 @@ mod tests {
             supported_backdrops_for(17_762),
             &[WindowBackdrop::Auto, WindowBackdrop::Off]
         );
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn set_macos_blur(window: &Window, enabled: bool) {
+    use objc2::{class, msg_send, runtime::AnyObject};
+    use objc2_foundation::{NSRect, ns_string};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return;
+    };
+    // GPUI owns this NSView; AppKit retains the effect as its subview. All
+    // calls run on the window's UI thread and the identifier belongs only to tty7.
+    unsafe {
+        let render_view = handle.ns_view.as_ptr().cast::<AnyObject>();
+        let content: *mut AnyObject = msg_send![render_view, superview];
+        if content.is_null() {
+            return;
+        }
+        let identifier = ns_string!("tty7-window-blur");
+        let children: *mut AnyObject = msg_send![content, subviews];
+        let count: usize = msg_send![children, count];
+        let mut existing: *mut AnyObject = std::ptr::null_mut();
+        for index in 0..count {
+            let child: *mut AnyObject = msg_send![children, objectAtIndex: index];
+            let name: *mut AnyObject = msg_send![child, identifier];
+            if !name.is_null() {
+                let matches: bool = msg_send![name, isEqual: identifier];
+                if matches {
+                    existing = child;
+                    break;
+                }
+            }
+        }
+        if !enabled {
+            if !existing.is_null() {
+                let _: () = msg_send![existing, removeFromSuperview];
+            }
+            return;
+        }
+        if !existing.is_null() {
+            return;
+        }
+        let frame: NSRect = msg_send![content, bounds];
+        let effect: *mut AnyObject = msg_send![class!(NSVisualEffectView), alloc];
+        let effect: *mut AnyObject = msg_send![effect, initWithFrame: frame];
+        if effect.is_null() {
+            return;
+        }
+        let _: () = msg_send![effect, setIdentifier: identifier];
+        // UnderWindowBackground, BehindWindow, Active. Public AppKit enums.
+        let _: () = msg_send![effect, setMaterial: 21isize];
+        let _: () = msg_send![effect, setBlendingMode: 0isize];
+        let _: () = msg_send![effect, setState: 1isize];
+        let _: () = msg_send![effect, setAutoresizingMask: 18usize];
+        let _: () =
+            msg_send![content, addSubview: effect positioned: -1isize relativeTo: render_view];
+        let _: () = msg_send![effect, release];
     }
 }

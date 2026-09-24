@@ -1,7 +1,7 @@
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, Background, Context, Div, Entity,
-    Focusable as _, FontWeight, Image, ImageFormat, KeyDownEvent, MouseButton, SharedString,
-    Stateful, Subscription, Window, div, img, prelude::*, px, relative, rgb,
+    Animation, AnimationExt as _, AnyElement, App, Context, Div, Entity, Focusable as _,
+    FontWeight, Image, ImageFormat, KeyDownEvent, MouseButton, SharedString, Stateful,
+    Subscription, Window, div, img, prelude::*, px, relative, rgb,
 };
 use gpui_component::InteractiveElementExt as _;
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
@@ -2531,17 +2531,8 @@ impl Tty7App {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let theme = cx.theme();
-        // The settings panel covers the whole window. Paint it on an opaque
-        // surface so the workspace translucency (window opacity / backdrop
-        // material) never shows through the settings UI — while keeping the
-        // preset's gradient fill instead of collapsing to a flat color.
-        let background: Background = crate::ui::theme::overlay_background(cx);
-        // That opaque fill also covers the theme background image the
-        // workspace root paints, so the panel carries its own copy (dimmed by
-        // the workspace fill, or the settings text would sit straight on the
-        // wallpaper); without it the image would blink out for as long as
-        // settings is open.
-        let background_layers = crate::ui::app::overlay_surface_layers(cx);
+        // The window root paints the configured translucent background.
+        // Its workspace content is hidden while settings are open.
         let (foreground, header_muted) = (theme.foreground, theme.muted_foreground);
         let note_bg = theme.secondary.opacity(0.5);
 
@@ -2643,6 +2634,7 @@ impl Tty7App {
             });
 
         let sidebar = Sidebar::new("settings-sidebar")
+            .bg(crate::ui::theme::workspace_surface_color(cx))
             .collapsible(SidebarCollapsible::None)
             .w(px(cols.nav))
             .header(
@@ -2919,7 +2911,6 @@ impl Tty7App {
             .relative()
             .flex()
             .flex_row()
-            .bg(background)
             .text_color(foreground)
             .track_focus(&focus_handle)
             // Escape peels one layer at a time. With the theme picker open that
@@ -3030,7 +3021,6 @@ impl Tty7App {
                 }
                 this.close_settings_checked(window, cx);
             }))
-            .children(background_layers)
             .child(sidebar)
             .child(content_pane)
             .child(

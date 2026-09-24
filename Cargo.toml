@@ -216,6 +216,7 @@ winresource = "0.1"
 # double-click (`terminal::smart_select`). Already in the tree transitively,
 # and it makes jieba unnecessary here — see the non-macos section below.
 core-foundation = "0.10"
+raw-window-handle = "0.6"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage"] }
 # NSData feeds the runtime Dock icon for bare (non-bundled) binaries — see

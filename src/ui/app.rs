@@ -8449,19 +8449,12 @@ impl Render for Tty7App {
 
         let window_bg = crate::ui::theme::workspace_background(cx);
         let bg_image = window_background_image_layer(cx);
-        let settings_bg = crate::ui::theme::overlay_background(cx);
 
         let settings_overlay = self.settings.is_some().then(|| {
             div()
                 .absolute()
                 .inset_0()
                 .occlude()
-                // Opaque on purpose: the settings panel must never let the
-                // workspace translucency (window opacity / backdrop material)
-                // show through, even at window edges during a resize. The
-                // preset's gradient fill is preserved, just with alpha 1;
-                // `render_settings` repaints the theme image over it.
-                .bg(settings_bg)
                 .child(self.render_settings(window, cx))
         });
 
@@ -8803,7 +8796,14 @@ impl Render for Tty7App {
                 .on_action(cx.listener(|_, _: &OpenDiscord, _window, cx| cx.open_url(DISCORD_URL)))
                 .on_action(cx.listener(|_, _: &ReportIssue, _window, cx| cx.open_url(ISSUES_URL)))
                 .children(bg_image)
-                .child(main_layout)
+                .child(
+                    div()
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .when(self.settings.is_some(), |surface| surface.invisible())
+                        .child(main_layout),
+                )
                 // Window-level because the strip lives in the title bar and the
                 // sidebar down the side: the caret between two tabs is in
                 // neither of the boxes the rest of the drag feedback is drawn
