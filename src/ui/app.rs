@@ -599,6 +599,7 @@ impl Tab {
             );
         };
         let leaf = leaf.read(cx);
+        let name = name.or_else(|| leaf.ssh_tab_name(cx));
         let view = tty7_core::core::tab_view::TabView {
             id: self.tree_id.get(),
             name,

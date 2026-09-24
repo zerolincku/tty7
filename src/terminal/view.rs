@@ -2096,6 +2096,32 @@ impl TerminalView {
         self.shell_spec.as_ref().map(|s| s.program.clone())
     }
 
+    /// The configured host name is the default SSH tab label, independent
+    /// of OSC titles or directories reported by the remote shell.
+    pub(crate) fn ssh_tab_name(&self, cx: &App) -> Option<String> {
+        let spec = self
+            .ssh_spec
+            .as_deref()
+            .or_else(|| self.workspace.as_ref()?.spec.as_deref())?;
+        let profile = spec
+            .profile_id
+            .as_deref()
+            .and_then(|id| uuid::Uuid::parse_str(id).ok())
+            .and_then(|id| {
+                cx.try_global::<Config>()?
+                    .ssh_profiles
+                    .iter()
+                    .find(|p| p.id == id)
+            });
+        if let Some(name) = profile
+            .map(|p| p.name.trim())
+            .filter(|name| !name.is_empty())
+        {
+            return Some(name.to_owned());
+        }
+        Some(spec.host.clone())
+    }
+
     pub fn ssh_spec(&self) -> Option<Box<crate::daemon::protocol::NativeSshSpec>> {
         self.ssh_spec.clone()
     }

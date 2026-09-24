@@ -284,15 +284,9 @@ pub struct Config {
     /// installation only ever ends up on Nightly by asking for it.
     #[serde(default, deserialize_with = "de_lenient")]
     pub update_channel: UpdateChannel,
-    /// Whether a found update is fetched and verified before the user asks for
-    /// it. On by default: it turns "spend five minutes downloading" into "press
-    /// restart", which is the whole difference between an update people apply
-    /// and one they postpone forever. Nothing is ever *installed* without an
-    /// explicit choice — the staged package waits in Settings.
-    ///
-    /// Worth turning off on a metered connection: the packages run 25–30 MB and
-    /// a check happens every six hours.
-    #[serde(default = "default_true")]
+    /// Whether a found update is fetched before the user asks for it.
+    /// Disabled by default in this fork, which has no configured update feed.
+    #[serde(default)]
     pub auto_download_updates: bool,
     /// Whether the GUI puts the bundled `tty7` CLI on PATH at launch (see
     /// `core::cli_install`). On by default: the CLI is the agent-facing half of
@@ -684,9 +678,9 @@ impl Default for Config {
             sidebar_collapsed_groups: Vec::new(),
             sidebar_diff_preview: true,
             notify_on_command_finish: NotifyMode::Unfocused,
-            check_for_updates: true,
+            check_for_updates: false,
             update_channel: UpdateChannel::default(),
-            auto_download_updates: true,
+            auto_download_updates: false,
             install_cli_on_path: true,
             gui_language: default_gui_language(),
             notify_threshold_secs: default_notify_threshold_secs(),

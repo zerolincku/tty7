@@ -642,6 +642,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsUpdateRetry => "重试",
         L10nKey::SettingsUpdateDismiss => "知道了",
         L10nKey::SettingsUpdateDownloadManually => "手动下载",
+        L10nKey::SettingsUpdateNotConfigured => "此版本未配置更新地址。",
         L10nKey::SettingsUpdateFailedTitle => "更新到 {version} 失败。",
         L10nKey::SettingsUpdateReady => "{version} 已下载并校验完成，可以安装。",
         L10nKey::SettingsUpdateReadyNextLaunch => "下次启动 tty7 时会自动装上。",

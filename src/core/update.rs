@@ -14,7 +14,9 @@ use tty7_core::daemon::install::AssetFetcher as _;
 use crate::core::config::{Config, UpdateChannel};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 
-const REPO: &str = "l0ng-ai/tty7";
+// This fork has no update feed. Configure these only for its own releases.
+const STABLE_UPDATE_URL: &str = "";
+const NIGHTLY_UPDATE_URL: &str = "";
 
 /// The rolling prerelease the Nightly channel follows. Force-moved to a new
 /// commit every night, which is exactly why it cannot double as a version.
@@ -24,13 +26,10 @@ const NIGHTLY_TAG: &str = "nightly";
 /// inferred. See `resolve_version`.
 const NIGHTLY_MANIFEST: &str = "nightly.json";
 
-pub const RELEASES_URL: &str = "https://github.com/l0ng-ai/tty7/releases/latest";
+pub const RELEASES_URL: &str = "";
 
-/// The nightly release's own page. Unlike Stable's, this URL is stable across
-/// nights — the tag stays put even as the commit under it moves. Spelled out
-/// rather than built from `NIGHTLY_TAG`, which `concat!` cannot take; the tail
-/// is asserted against it in `each_channel_reads_its_own_feed` instead.
-pub const NIGHTLY_RELEASE_URL: &str = "https://github.com/l0ng-ai/tty7/releases/tag/nightly";
+/// Release-page links are also unset until this fork publishes its own builds.
+pub const NIGHTLY_RELEASE_URL: &str = "";
 
 const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -217,6 +216,9 @@ pub struct UpdateStatus {
 impl Global for UpdateStatus {}
 
 pub fn spawn_check(cx: &mut App) {
+    if release_endpoint(cx.global::<Config>().update_channel).is_empty() {
+        return;
+    }
     // Before hydration and before the config gate: an interrupted portable
     // replacement has to surface whether or not checking is on, and it is
     // recorded as a failure so `hydrate_from_disk` below carries it into the
@@ -294,6 +296,16 @@ fn spawn_recheck_loop(cx: &mut App) {
 }
 
 fn spawn_check_inner(report_failure: bool, cx: &mut App) {
+    if release_endpoint(cx.global::<Config>().update_channel).is_empty() {
+        if report_failure {
+            update_status(cx, |status| {
+                status.phase = UpdatePhase::Failed(UpdateFailure::Check(
+                    t(L10nKey::SettingsUpdateNotConfigured).to_owned(),
+                ));
+            });
+        }
+        return;
+    }
     if is_busy(cx) {
         return;
     }
@@ -602,6 +614,9 @@ pub fn cancel_download(cx: &mut App) {
 /// Install as soon as there is something to install: now if the package is
 /// already staged, otherwise when the download in flight finishes.
 pub fn install_available(cx: &mut App) {
+    if release_endpoint(cx.global::<Config>().update_channel).is_empty() {
+        return;
+    }
     let status = cx.try_global::<UpdateStatus>().cloned().unwrap_or_default();
     if let Some(pending) = status.ready.clone()
         && pending.is_usable()
@@ -961,10 +976,13 @@ fn record_failure(version: &str, detail: &str, cx: &mut App) {
 /// Reads the config from disk rather than the global: several callers reach
 /// here from a background thread where the `App` is out of reach.
 pub fn open_releases_page() {
-    open_url(match Config::load().update_channel {
+    let url = match Config::load().update_channel {
         UpdateChannel::Stable => RELEASES_URL,
         UpdateChannel::Nightly => NIGHTLY_RELEASE_URL,
-    });
+    };
+    if !url.is_empty() {
+        open_url(url);
+    }
 }
 
 pub fn open_url(url: &str) {
@@ -994,6 +1012,9 @@ pub fn open_url(url: &str) {
 /// Every failure path clears the plan and returns `false`. An update that
 /// cannot be applied must never become an app that will not start.
 pub fn apply_pending_at_launch() -> bool {
+    if release_endpoint(Config::load().update_channel).is_empty() {
+        return false;
+    }
     let mut state = UpdateState::load();
     let Some(pending) = state.pending.clone() else {
         return false;
@@ -1790,14 +1811,10 @@ struct NightlyManifest {
 /// Keeping the two feeds apart is the whole point of the channel: neither can
 /// hand the other an update, so an installation only changes channel when the
 /// user changes it in Settings.
-fn release_endpoint(channel: UpdateChannel) -> String {
+fn release_endpoint(channel: UpdateChannel) -> &'static str {
     match channel {
-        // Excludes prereleases by definition, so Stable can never be offered a
-        // nightly even though both live in the same repository.
-        UpdateChannel::Stable => format!("https://api.github.com/repos/{REPO}/releases/latest"),
-        UpdateChannel::Nightly => {
-            format!("https://api.github.com/repos/{REPO}/releases/tags/{NIGHTLY_TAG}")
-        }
+        UpdateChannel::Stable => STABLE_UPDATE_URL,
+        UpdateChannel::Nightly => NIGHTLY_UPDATE_URL,
     }
 }
 
@@ -1948,6 +1965,10 @@ async fn fetch_latest_release(
     channel: UpdateChannel,
     manual_proxy: Option<String>,
 ) -> Result<(LatestRelease, String)> {
+    anyhow::ensure!(
+        !release_endpoint(channel).is_empty(),
+        "update feed is not configured"
+    );
     let client = build_http_client(manual_proxy.as_deref())?;
     let release: LatestRelease = fetch_json(&client, &release_endpoint(channel))
         .await
@@ -3296,21 +3317,15 @@ mod tests {
         }
     }
 
-    /// Each channel reads its own release, which is the mechanism that keeps a
-    /// Nightly from being walked back onto Stable by an update it never asked
-    /// for. `/releases/latest` excludes prereleases by definition, so the two
-    /// feeds cannot see each other's builds.
     #[test]
-    fn each_channel_reads_its_own_feed() {
-        assert!(release_endpoint(UpdateChannel::Stable).ends_with("/releases/latest"));
-        assert!(
-            release_endpoint(UpdateChannel::Nightly)
-                .ends_with(&format!("/releases/tags/{NIGHTLY_TAG}"))
-        );
-        // The page a Nightly user is sent to has to be the release that feed
-        // reads. `concat!` cannot build the URL from the constant, so this is
-        // where the two are held together.
-        assert!(NIGHTLY_RELEASE_URL.ends_with(&format!("/releases/tag/{NIGHTLY_TAG}")));
+    fn fork_update_feeds_are_unconfigured() {
+        assert!(release_endpoint(UpdateChannel::Stable).is_empty());
+        assert!(release_endpoint(UpdateChannel::Nightly).is_empty());
+        assert!(RELEASES_URL.is_empty());
+        assert!(NIGHTLY_RELEASE_URL.is_empty());
+        for channel in [UpdateChannel::Stable, UpdateChannel::Nightly] {
+            assert!(smol::block_on(fetch_latest_release(channel, None)).is_err());
+        }
     }
 
     /// The fallback for a nightly published without `nightly.json`. The tag is

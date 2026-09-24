@@ -725,6 +725,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsUpdateRetry => "Try again",
         L10nKey::SettingsUpdateDismiss => "Dismiss",
         L10nKey::SettingsUpdateDownloadManually => "Download manually",
+        L10nKey::SettingsUpdateNotConfigured => "No update source is configured for this build.",
         L10nKey::SettingsUpdateFailedTitle => "Updating to {version} failed.",
         L10nKey::SettingsUpdateReady => "Version {version} is downloaded and ready to install.",
         L10nKey::SettingsUpdateReadyNextLaunch => {

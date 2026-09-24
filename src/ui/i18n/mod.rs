@@ -573,6 +573,7 @@ l10n_keys! {
     SettingsUpdateRetry,
     SettingsUpdateDismiss,
     SettingsUpdateDownloadManually,
+    SettingsUpdateNotConfigured,
     SettingsUpdateFailedTitle,
     SettingsUpdateReady,
     SettingsUpdateReadyNextLaunch,

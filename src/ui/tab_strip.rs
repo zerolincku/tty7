@@ -2200,6 +2200,26 @@ mod ssh_host_row_tests {
     use gpui::TestAppContext;
 
     #[gpui::test]
+    fn ssh_tab_uses_host_name_over_shell_title_and_keeps_manual_names(cx: &mut TestAppContext) {
+        let (app, mut vcx) = harness(cx);
+        let profile = SshProfile::new("dev_158");
+        let id = profile.id;
+        let _stream = app.update_in(&mut vcx, |app, window, cx| {
+            cx.global_mut::<Config>().ssh_profiles.push(profile);
+            let (pane, stream) = quiet_test_ssh_pane_of(7, Some(id), window, cx);
+            pane.update(cx, |view, _| view.title = "secure@cloudcare158:~".into());
+            let mut tab = Tab::new(Pane::leaf(PaneSlot::Ready(pane)));
+            assert_eq!(app.tab_label(&tab, 0, Some(window), cx), "dev_158");
+            tab.name = Some("部署日志".into());
+            assert_eq!(app.tab_label(&tab, 0, Some(window), cx), "部署日志");
+            tab.name = None;
+            cx.global_mut::<Config>().ssh_profiles.clear();
+            assert_eq!(app.tab_label(&tab, 0, Some(window), cx), "build-box");
+            stream
+        });
+    }
+
+    #[gpui::test]
     fn only_a_tab_on_an_ssh_host_is_offered_the_host_form(cx: &mut TestAppContext) {
         set_locale("en");
         let (app, mut vcx) = harness(cx);

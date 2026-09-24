@@ -735,6 +735,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsUpdateRetry => "再試行",
         L10nKey::SettingsUpdateDismiss => "閉じる",
         L10nKey::SettingsUpdateDownloadManually => "手動でダウンロード",
+        L10nKey::SettingsUpdateNotConfigured => "このビルドには更新元が設定されていません。",
         L10nKey::SettingsUpdateFailedTitle => "{version} へのアップデートに失敗しました。",
         L10nKey::SettingsUpdateReady => {
             "{version} のダウンロードと検証が完了し、インストールできます。"
