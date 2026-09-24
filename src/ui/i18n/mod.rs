@@ -990,6 +990,8 @@ l10n_keys! {
     AppMenuWindow,
     AppMenuHelp,
     AppMenuNewTab,
+    DefaultWorkspaceName,
+    NumberedWorkspaceName,
     AppMenuNewWorkspace,
     AppMenuNewWorktreeTab,
     AppMenuSplitRight,

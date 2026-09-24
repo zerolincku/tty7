@@ -2,6 +2,8 @@ use super::L10nKey;
 
 pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
     Some(match key {
+        L10nKey::DefaultWorkspaceName => "默认工作区",
+        L10nKey::NumberedWorkspaceName => "工作区 {n}",
         L10nKey::SettingsNavGeneral => "常规",
         L10nKey::SettingsEditShortcuts => "编辑快捷键…",
         L10nKey::SettingsModifiedOnly => "仅显示已修改",

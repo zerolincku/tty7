@@ -2,6 +2,8 @@ use super::L10nKey;
 
 pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
     Some(match key {
+        L10nKey::DefaultWorkspaceName => "デフォルトワークスペース",
+        L10nKey::NumberedWorkspaceName => "ワークスペース {n}",
         L10nKey::SettingsNavGeneral => "一般",
         L10nKey::SettingsEditShortcuts => "ショートカットを編集…",
         L10nKey::SettingsModifiedOnly => "変更済みのみ",

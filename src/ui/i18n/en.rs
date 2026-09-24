@@ -5,6 +5,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsSaveError => "Changes could not be saved: {error}",
         L10nKey::SettingsRetrySave => "Retry saving",
 
+        L10nKey::DefaultWorkspaceName => "Default Workspace",
+        L10nKey::NumberedWorkspaceName => "Workspace {n}",
         L10nKey::SettingsNavGeneral => "General",
         L10nKey::SettingsEditShortcuts => "Edit shortcuts…",
         L10nKey::SettingsModifiedOnly => "Modified only",

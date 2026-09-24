@@ -1332,9 +1332,7 @@ fn start_prime(cx: &mut App, client_ws: WorkspaceId) {
     .detach();
 }
 
-/// A codename no workspace on `host` is using. Beats leaving new workspaces
-/// named after whatever directory their first shell happened to start in —
-/// three of those in a switcher all read the same.
+/// A readable default name not already used on this machine.
 pub(crate) fn fresh_workspace_name(cx: &App, host: HostId) -> String {
     let mut taken: Vec<String> = Vec::new();
     if let Some(machine) = crate::ui::machine_mirror::MachineMirrors::machine(cx, host) {
@@ -1342,7 +1340,7 @@ pub(crate) fn fresh_workspace_name(cx: &App, host: HostId) -> String {
     }
     // Labels are the names the switcher actually shows, which for an unnamed
     // workspace is its directory. Counting those as taken is deliberately
-    // generous — it only ever costs another roll of the dice.
+    // generous — it only ever skips an occupied number.
     if cx.has_global::<WorkspaceStore>() {
         taken.extend(
             WorkspaceStore::all(cx)
@@ -1352,7 +1350,24 @@ pub(crate) fn fresh_workspace_name(cx: &App, host: HostId) -> String {
                 .filter_map(|w| w.label.clone()),
         );
     }
-    tty7_core::core::codename::unique(|name| taken.iter().any(|t| t == name))
+    next_workspace_name(taken.iter().map(String::as_str))
+}
+
+fn next_workspace_name<'a>(taken: impl IntoIterator<Item = &'a str>) -> String {
+    let taken: Vec<_> = taken.into_iter().collect();
+    if taken.is_empty() {
+        return t(L10nKey::DefaultWorkspaceName).to_owned();
+    }
+    for number in 2u64.. {
+        let name = crate::ui::i18n::t_fmt(
+            L10nKey::NumberedWorkspaceName,
+            &[("n", &number.to_string())],
+        );
+        if !taken.contains(&name.as_str()) {
+            return name;
+        }
+    }
+    unreachable!("workspace number space exhausted")
 }
 
 /// This workspace's layout, and the name the machine has for it.
@@ -2094,10 +2109,10 @@ fn pull_workspace(
         .iter()
         .filter_map(|w| w.name.as_deref())
         .collect();
-    // A name the user typed beats a rolled one. This create and `start_prime`'s
+    // A name the user typed beats a generated one. This create and `start_prime`'s
     // race each other (see the `Err` arm below), so both have to offer it —
     // whichever wins, the workspace ends up called what was asked for.
-    let name = chosen.unwrap_or_else(|| tty7_core::core::codename::unique(|n| taken.contains(&n)));
+    let name = chosen.unwrap_or_else(|| next_workspace_name(taken));
     match client.call(ControlRequest::WorkspaceCreate {
         name: Some(name),
         workspace: Some(machine_ws),

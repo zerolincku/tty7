@@ -404,11 +404,8 @@ enum HostItem {
     AddHost,
 }
 
-/// What the form's name box starts out saying: the same codename a workspace
-/// created without one would have been given anyway (`fresh_workspace_name` —
-/// "quiet-otter"), rolled against the chosen machine so it stays unique
-/// there. Editable before it is spent; clearing the box creates a nameless
-/// workspace that shows its directory, the old fallback.
+/// Prefill the next available default workspace name on the chosen machine.
+/// The user can edit it before creating the workspace.
 fn default_workspace_name(chosen: Option<&HostChoice>, cx: &App) -> String {
     let host = match chosen {
         None => tty7_core::host::HostId::LOCAL,
