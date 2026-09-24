@@ -241,6 +241,11 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsShareKeyText => {
             "名称：{name}\n地址：{host}\n端口：{port}\n用户名：{user}\n认证方式：SSH 密钥"
         }
+        L10nKey::SettingsRenameSshGroup => "重命名分组…",
+        L10nKey::SettingsDeleteSshGroup => "删除分组",
+        L10nKey::SettingsDeleteSshGroupBody => {
+            "仅删除分组，组内主机将移回默认分组，已保存的连接信息不受影响。"
+        }
         L10nKey::SettingsCreateSshGroup => "创建分组…",
         L10nKey::SettingsMoveSshGroup => "移动到分组…",
         L10nKey::SettingsSshGroup => "分组",

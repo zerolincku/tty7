@@ -4329,7 +4329,7 @@ impl Tty7App {
         } else {
             IconName::ChevronDown
         };
-        h_flex()
+        let row = h_flex()
             .id(SharedString::from(format!("ssh-group-{key}")))
             .items_center()
             .gap_1()
@@ -4364,8 +4364,32 @@ impl Tty7App {
                         .child(div().size(px(5.)).rounded_full().bg(cx.theme().success))
                         .child(div().child(live_here.to_string())),
                 )
-            })
-            .into_any_element()
+            });
+        if key.is_empty() || key == crate::core::ssh_config::IMPORTED_GROUP {
+            return row.into_any_element();
+        }
+        let app = cx.entity().downgrade();
+        let context_app = app.clone();
+        let group = key.to_owned();
+        let context_group = group.clone();
+        row.child(
+            div()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    Button::new(SharedString::from(format!("ssh-group-menu-{key}")))
+                        .icon(Icon::empty().path("stock/icons/ellipsis.svg"))
+                        .ghost()
+                        .small()
+                        .tooltip(t(L10nKey::TabTooltipMore))
+                        .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu, _, cx| {
+                            Self::ssh_group_menu(menu, &group, cx.theme().danger, &app)
+                        }),
+                ),
+        )
+        .context_menu(move |menu, _, cx| {
+            Self::ssh_group_menu(menu, &context_group, cx.theme().danger, &context_app)
+        })
+        .into_any_element()
     }
 
     fn render_ssh_host_row(
@@ -5765,6 +5789,164 @@ impl Tty7App {
                 .remove(group.as_deref().unwrap_or(""));
         }
         cx.notify();
+    }
+
+    fn ssh_group_menu(
+        menu: PopupMenu,
+        group: &str,
+        danger: gpui::Hsla,
+        app: &gpui::WeakEntity<Self>,
+    ) -> PopupMenu {
+        let rename_app = app.clone();
+        let rename_group = group.to_owned();
+        let delete_app = app.clone();
+        let delete_group = group.to_owned();
+        menu.item(
+            PopupMenuItem::new(t(L10nKey::SettingsRenameSshGroup)).on_click(
+                move |_, window, cx| {
+                    let _ = rename_app.update(cx, |this, cx| {
+                        this.rename_ssh_group_dialog(rename_group.clone(), window, cx)
+                    });
+                },
+            ),
+        )
+        .separator()
+        .item(
+            PopupMenuItem::element(move |_, _| {
+                div()
+                    .text_color(danger)
+                    .child(t(L10nKey::SettingsDeleteSshGroup))
+            })
+            .on_click(move |_, window, cx| {
+                let group = delete_group.clone();
+                let answer = window.prompt(
+                    gpui::PromptLevel::Warning,
+                    &t_fmt(L10nKey::FileTreeDeleteTitle, &[("name", &group)]),
+                    Some(t(L10nKey::SettingsDeleteSshGroupBody)),
+                    &crate::ui::confirm_answers(t(L10nKey::Delete), t(L10nKey::Cancel)),
+                    cx,
+                );
+                let app = delete_app.clone();
+                cx.spawn(async move |cx| {
+                    if let Ok(0) = answer.await {
+                        let _ = app.update(cx, |this, cx| this.replace_ssh_group(&group, None, cx));
+                    }
+                })
+                .detach();
+            }),
+        )
+    }
+
+    // Change membership and an open editor together, so saving the editor
+    // cannot bring back a deleted group or its previous name.
+    fn replace_ssh_group(&mut self, old: &str, new: Option<String>, cx: &mut Context<Self>) {
+        if old.is_empty() || old == crate::core::ssh_config::IMPORTED_GROUP {
+            return;
+        }
+        self.update_config(cx, |cfg| {
+            cfg.ssh_groups.retain(|group| group != old);
+            if let Some(name) = &new {
+                cfg.ssh_groups.push(name.clone());
+            }
+            for profile in &mut cfg.ssh_profiles {
+                if profile.group.as_deref() == Some(old) {
+                    profile.group = new.clone();
+                }
+            }
+        });
+        if let Some(form) = self.ssh_form_mut()
+            && form.carry_group.as_deref() == Some(old)
+        {
+            form.carry_group = new.clone();
+        }
+        if let Some(state) = self.active_settings_mut() {
+            let collapsed = state.ssh_collapsed_groups.remove(old);
+            if collapsed && let Some(name) = &new {
+                state.ssh_collapsed_groups.insert(name.clone());
+            }
+            if new.is_none() {
+                state.ssh_collapsed_groups.remove("");
+            }
+        }
+        cx.notify();
+    }
+
+    fn rename_ssh_group(
+        &mut self,
+        old: &str,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if name == old {
+            window.close_dialog(cx);
+            return;
+        }
+        let cfg = cx.global::<Config>();
+        if name.is_empty()
+            || name == crate::core::ssh_config::IMPORTED_GROUP
+            || name == "~/.ssh/config"
+            || name == t(L10nKey::SettingsDefaultSshGroup)
+            || cfg.ssh_groups.contains(&name)
+            || cfg
+                .ssh_profiles
+                .iter()
+                .any(|p| p.group.as_deref() == Some(&name))
+        {
+            window.push_notification(t(L10nKey::SettingsSshGroupInvalid), cx);
+            return;
+        }
+        self.replace_ssh_group(old, Some(name), cx);
+        window.close_dialog(cx);
+    }
+
+    fn rename_ssh_group_dialog(
+        &mut self,
+        old: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t(L10nKey::SettingsSshGroupName)));
+        input.update(cx, |input, cx| input.set_value(old.clone(), window, cx));
+        let enter_old = old.clone();
+        cx.subscribe_in(
+            &input,
+            window,
+            move |this, input, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.rename_ssh_group(
+                        &enter_old,
+                        input.read(cx).value().trim().to_string(),
+                        window,
+                        cx,
+                    );
+                }
+            },
+        )
+        .detach();
+        let app = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let input_action = input.clone();
+            let app = app.clone();
+            let old = old.clone();
+            dialog
+                .title(t(L10nKey::SettingsRenameSshGroup))
+                .w(px(500.))
+                .on_ok(|_, _, _| false)
+                .child(
+                    v_flex().gap_3().child(Input::new(&input)).child(
+                        Button::new("rename-ssh-group")
+                            .label(t(L10nKey::Save))
+                            .on_click(move |_, window, cx| {
+                                let name = input_action.read(cx).value().trim().to_string();
+                                let _ = app.update(cx, |this, cx| {
+                                    this.rename_ssh_group(&old, name, window, cx)
+                                });
+                            }),
+                    ),
+                )
+        });
     }
 
     fn create_ssh_group(
@@ -10582,6 +10764,43 @@ mod gpui_tests {
     /// compares profiles is blind to it. Without the secret folded in, Save
     /// stays greyed out over a password the user has just typed, and the only
     /// way to store one is to connect and wait to be asked.
+    #[gpui::test]
+    fn ssh_group_rename_delete_preserves_hosts_and_editor(cx: &mut TestAppContext) {
+        let (app, mut vcx) = harness(cx);
+        app.update_in(&mut vcx, |app, window, cx| {
+            let mut profile = crate::core::ssh_profile::SshProfile::new("server");
+            profile.group = Some("Work".into());
+            profile.host = "example.com".into();
+            let id = profile.id;
+            cx.global_mut::<Config>().ssh_profiles = vec![profile.clone()];
+            cx.global_mut::<Config>().ssh_groups = vec!["Work".into(), "Other".into()];
+            app.open_settings_section(SettingsSection::Ssh, window, cx);
+            app.ssh_form_load(&profile, window, cx);
+            app.rename_ssh_group("Work", "Other".into(), window, cx);
+            assert_eq!(
+                cx.global::<Config>().ssh_profiles[0].group.as_deref(),
+                Some("Work")
+            );
+            app.rename_ssh_group("Work", "Production".into(), window, cx);
+            assert_eq!(
+                cx.global::<Config>().ssh_profiles[0].group.as_deref(),
+                Some("Production")
+            );
+            assert_eq!(
+                app.ssh_form_mut().unwrap().carry_group.as_deref(),
+                Some("Production")
+            );
+            app.replace_ssh_group("Production", None, cx);
+            let cfg = cx.global::<Config>();
+            assert_eq!(cfg.ssh_profiles.len(), 1);
+            assert_eq!(cfg.ssh_profiles[0].id, id);
+            assert_eq!(cfg.ssh_profiles[0].host, "example.com");
+            assert!(cfg.ssh_profiles[0].group.is_none());
+            assert_eq!(cfg.ssh_groups, vec!["Other"]);
+            assert!(app.ssh_form_mut().unwrap().carry_group.is_none());
+        });
+    }
+
     #[gpui::test]
     fn a_typed_password_is_something_the_form_has_to_save(cx: &mut TestAppContext) {
         crate::core::config::pin_test_config_dir();

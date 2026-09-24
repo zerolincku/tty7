@@ -269,6 +269,11 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsShareKeyText => {
             "名前：{name}\nアドレス：{host}\nポート：{port}\nユーザー名：{user}\n認証方式：SSH 鍵"
         }
+        L10nKey::SettingsRenameSshGroup => "グループ名を変更…",
+        L10nKey::SettingsDeleteSshGroup => "グループを削除",
+        L10nKey::SettingsDeleteSshGroupBody => {
+            "ホストはデフォルトグループに移動します。保存済みの接続情報は保持されます。"
+        }
         L10nKey::SettingsCreateSshGroup => "グループを作成…",
         L10nKey::SettingsMoveSshGroup => "グループに移動…",
         L10nKey::SettingsSshGroup => "グループ",

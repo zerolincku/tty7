@@ -265,6 +265,11 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsShareKeyText => {
             "Name: {name}\nAddress: {host}\nPort: {port}\nUsername: {user}\nAuthentication: SSH key"
         }
+        L10nKey::SettingsRenameSshGroup => "Rename Group…",
+        L10nKey::SettingsDeleteSshGroup => "Delete Group",
+        L10nKey::SettingsDeleteSshGroupBody => {
+            "Hosts will move to the default group. Saved connection details will be kept."
+        }
         L10nKey::SettingsCreateSshGroup => "Create Group…",
         L10nKey::SettingsMoveSshGroup => "Move to Group…",
         L10nKey::SettingsSshGroup => "Group",

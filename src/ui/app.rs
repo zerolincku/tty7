@@ -6133,7 +6133,18 @@ impl Tty7App {
             ssh_form: None,
             ssh_detail: crate::ui::settings::SshDetail::None,
             ssh_filter,
-            ssh_collapsed_groups: std::collections::HashSet::new(),
+            ssh_collapsed_groups: {
+                let cfg = cx.global::<Config>();
+                cfg.ssh_groups
+                    .iter()
+                    .cloned()
+                    .chain(
+                        cfg.ssh_profiles
+                            .iter()
+                            .map(|p| p.group.clone().unwrap_or_default()),
+                    )
+                    .collect()
+            },
             ssh_quick_connect,
             agent_hooks_host: crate::ui::host_ops::HostId::LOCAL,
             agent_hooks_states: crate::ui::settings::AgentHooksView::Loading,
