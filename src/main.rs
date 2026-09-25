@@ -518,6 +518,7 @@ fn handle_external_opens(urls: Vec<String>, cx: &mut App) {
 }
 
 fn main() {
+    crate::daemon::ssh::rsync::bridge_entry();
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     {
         if args.first().map(std::ffi::OsString::as_os_str)

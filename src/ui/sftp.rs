@@ -160,10 +160,30 @@ impl SftpRoute {
     }
 }
 
+// A pane exists before its asynchronous native SSH connection is bound.
+// Retry only this transient condition; permission/path errors stay visible.
+const SSH_NOT_READY: &str = "pane has no native SSH connection (SFTP needs a native-SSH pane)";
+const CONNECTION_RETRIES: u8 = 60;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingNavigation {
+    // None means resolve the login directory first, not navigate to '/'.
+    path: Option<String>,
+    attempt: u8,
+}
+
+fn pending_navigation(error: &str, path: Option<String>, attempt: u8) -> Option<PendingNavigation> {
+    (error == SSH_NOT_READY && attempt < CONNECTION_RETRIES)
+        .then_some(PendingNavigation { path, attempt: attempt + 1 })
+}
+
 pub(crate) struct SftpPanelState {
     pub(crate) open_pane_id: Option<u64>,
     pub(crate) open_workspace: Option<crate::terminal::PaneWorkspace>,
     pub(crate) cwd: String,
+    transfer_method: Option<String>,
+    method_generation: u64,
+    pending_navigation: Option<PendingNavigation>,
     pub(crate) cwds: std::collections::HashMap<u64, String>,
     /// The side panel has been closed since the browser last opened, so the
     /// next open is the user asking to look at files again rather than the
@@ -219,6 +239,9 @@ impl SftpPanelState {
             open_pane_id: None,
             open_workspace: None,
             cwd: "/".to_string(),
+            transfer_method: None,
+            method_generation: 0,
+            pending_navigation: None,
             cwds: std::collections::HashMap::new(),
             panel_was_closed: true,
             entries: Vec::new(),
@@ -416,8 +439,12 @@ impl Tty7App {
 
     pub(crate) fn sftp_close_browser(&mut self, cx: &mut Context<Self>) {
         self.sftp_panel.open_pane_id = None;
+        self.sftp_panel.pending_navigation = None;
+        self.sftp_panel.nav_gen = self.sftp_panel.nav_gen.wrapping_add(1);
         self.sftp_panel.entries.clear();
         self.sftp_panel.error = None;
+        self.sftp_panel.transfer_method = None;
+        self.sftp_panel.method_generation = self.sftp_panel.method_generation.wrapping_add(1);
         // No `Window` here, and none needed: the browser itself is going away
         // or being re-pointed at another pane, so focus is settled by whoever
         // did that, not by the form.
@@ -455,7 +482,10 @@ impl Tty7App {
 
     fn sftp_open_at(&mut self, pane_id: u64, window: &mut Window, cx: &mut Context<Self>) {
         self.sftp_panel.open_pane_id = Some(pane_id);
+        self.sftp_panel.pending_navigation = None;
         self.sftp_panel.open_workspace = self.pane_workspace(pane_id, window, cx);
+        self.sftp_panel.transfer_method = None;
+        self.sftp_probe_transfer_method(cx);
         self.sftp_panel.entries.clear();
         self.sftp_panel.error = None;
         // No `Window` here, and none needed: the browser itself is going away
@@ -479,24 +509,45 @@ impl Tty7App {
     }
 
     fn sftp_navigate_login_dir(&mut self, pane_id: u64, cx: &mut Context<Self>) {
+        self.sftp_navigate_login_attempt(pane_id, 0, cx);
+    }
+
+    fn sftp_navigate_login_attempt(&mut self, pane_id: u64, attempt: u8, cx: &mut Context<Self>) {
+        self.sftp_panel.nav_gen = self.sftp_panel.nav_gen.wrapping_add(1);
+        let generation = self.sftp_panel.nav_gen;
+        self.sftp_panel.pending_navigation = None;
         self.sftp_panel.loading = true;
+        self.sftp_panel.error = None;
         let route = self.sftp_route();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move { route.op(SftpOp::Realpath { path: ".".into() }) })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if this.sftp_panel.open_pane_id != Some(pane_id) {
+                if this.sftp_panel.open_pane_id != Some(pane_id)
+                    || this.sftp_panel.nav_gen != generation {
                     return;
                 }
-                let home = match result {
-                    SftpOpResult::Link(path) if path.starts_with('/') => path,
-                    _ => "/".to_string(),
-                };
-                this.sftp_navigate(home, cx);
+                this.sftp_panel.loading = false;
+                match result {
+                    SftpOpResult::Link(path) if path.starts_with('/') => this.sftp_navigate(path, cx),
+                    SftpOpResult::Error(error) => this.sftp_navigation_failed(error, None, attempt),
+                    _ => this.sftp_navigate("/".into(), cx),
+                }
+                cx.notify();
             });
-        })
-        .detach();
+        }).detach();
+    }
+
+    fn sftp_navigation_failed(&mut self, error: String, path: Option<String>, attempt: u8) {
+        self.sftp_panel.pending_navigation = pending_navigation(&error, path, attempt);
+        self.sftp_panel.error = if self.sftp_panel.pending_navigation.is_some() {
+            None
+        } else if error == SSH_NOT_READY {
+            Some(t(L10nKey::SftpConnectionNotReady).to_string())
+        } else {
+            Some(error)
+        };
     }
 
     fn pane_shell_cwd(&self, pane_id: u64, window: &Window, cx: &App) -> Option<String> {
@@ -515,11 +566,17 @@ impl Tty7App {
     }
 
     pub(crate) fn sftp_navigate(&mut self, path: String, cx: &mut Context<Self>) {
+        self.sftp_navigate_attempt(path, 0, cx);
+    }
+
+    fn sftp_navigate_attempt(&mut self, path: String, attempt: u8, cx: &mut Context<Self>) {
         let Some(pane_id) = self.sftp_panel.open_pane_id else {
             return;
         };
         self.sftp_panel.nav_gen = self.sftp_panel.nav_gen.wrapping_add(1);
         let generation = self.sftp_panel.nav_gen;
+        self.sftp_panel.pending_navigation = None;
+        self.sftp_panel.error = None;
         self.sftp_panel.loading = true;
         cx.notify();
 
@@ -545,9 +602,12 @@ impl Tty7App {
                         this.sftp_panel.error = None;
                         this.sftp_panel.editing_path = None;
                         this.sftp_panel.editing_path_sub.clear();
+                        if this.sftp_panel.transfer_method.is_none() {
+                            this.sftp_probe_transfer_method(cx);
+                        }
                     }
                     Err(e) => {
-                        this.sftp_panel.error = Some(e);
+                        this.sftp_navigation_failed(e, Some(path), attempt);
                     }
                 }
                 cx.notify();
@@ -556,9 +616,36 @@ impl Tty7App {
         .detach();
     }
 
+    fn sftp_probe_transfer_method(&mut self, cx: &mut Context<Self>) {
+        self.sftp_panel.method_generation = self.sftp_panel.method_generation.wrapping_add(1);
+        let generation = self.sftp_panel.method_generation;
+        let route = self.sftp_route();
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async move { route.op(SftpOp::TransferMethod) }).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.sftp_panel.method_generation != generation { return; }
+                this.sftp_panel.transfer_method = match result {
+                    SftpOpResult::TransferMethod(method) => Some(method),
+                    _ => None,
+                };
+                cx.notify();
+            });
+        }).detach();
+    }
+
     pub(crate) fn sftp_refresh(&mut self, cx: &mut Context<Self>) {
-        let cwd = self.sftp_panel.cwd.clone();
-        self.sftp_navigate(cwd, cx);
+        self.sftp_probe_transfer_method(cx);
+        match self.sftp_panel.pending_navigation.clone() {
+            Some(PendingNavigation { path: None, .. }) => {
+                if let Some(pane_id) = self.sftp_panel.open_pane_id {
+                    self.sftp_navigate_login_dir(pane_id, cx);
+                }
+            }
+            pending => {
+                let path = pending.and_then(|p| p.path).unwrap_or_else(|| self.sftp_panel.cwd.clone());
+                self.sftp_navigate(path, cx);
+            }
+        }
     }
 
     pub(crate) fn sftp_up(&mut self, cx: &mut Context<Self>) {
@@ -1078,6 +1165,26 @@ impl Tty7App {
         // writes under; the one owed for it is taken when it settles.
     }
 
+    fn sftp_retry_job(&mut self, job: SftpJobProgress, cx: &mut Context<Self>) {
+        let Some(pane_id) = self.sftp_panel.open_pane_id else { return; };
+        if !self.sftp_panel.jobs.iter().any(|current| current.job_id == job.job_id) { return; }
+        let spec = SftpTransferSpec {
+            pane_id, kind: job.kind, local: job.local.into(),
+            remote: job.remote, recursive: job.recursive,
+        };
+        match self.sftp_route().transfer_start(spec) {
+            Ok(id) => {
+                self.sftp_panel.dismissed_jobs.insert(job.job_id);
+                if job.kind == SftpTransferKind::Upload { self.sftp_panel.uploads_awaiting_listing.insert(id); }
+                self.sftp_probe_transfer_method(cx);
+                self.sftp_poll_jobs(cx);
+                self.sftp_start_polling(cx);
+            }
+            Err(e) => self.sftp_panel.jobs_error = Some(e),
+        }
+        cx.notify();
+    }
+
     pub(crate) fn sftp_cancel_job(&mut self, job_id: u64, cx: &mut Context<Self>) {
         self.sftp_panel.jobs = RemoteTerminal::sftp_transfer_cancel(job_id);
         cx.notify();
@@ -1132,6 +1239,9 @@ impl Tty7App {
         let previous = std::mem::take(&mut self.sftp_panel.jobs);
         let (jobs, failure) = apply_poll(previous, reply);
         let failed = failure.is_some();
+        if let Some(job) = jobs.iter().rev().find(|job| job.state == SftpJobState::Running && !job.method.is_empty()) {
+            self.sftp_panel.transfer_method = Some(job.method.clone());
+        }
         self.sftp_panel.jobs = jobs;
         self.sftp_panel.jobs_error = failure;
         if failed {
@@ -1183,6 +1293,18 @@ impl Tty7App {
                             return false;
                         }
                         this.sftp_apply_jobs(jobs, cx);
+                        if !this.sftp_panel.loading {
+                            if let Some(pending) = this.sftp_panel.pending_navigation.take() {
+                                match pending.path {
+                                    Some(path) => this.sftp_navigate_attempt(path, pending.attempt, cx),
+                                    None => {
+                                        if let Some(pane_id) = this.sftp_panel.open_pane_id {
+                                            this.sftp_navigate_login_attempt(pane_id, pending.attempt, cx);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         true
                     })
                     .unwrap_or(false);
@@ -1201,9 +1323,10 @@ impl Tty7App {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let controls = self.sftp_controls(cx);
-        let title = self.panel_title(
+        let title = self.panel_title_with_badge(
             t(L10nKey::SftpPanelTitleFiles),
             Some(host),
+            self.sftp_panel.transfer_method.clone(),
             Some(controls),
             window,
             cx,
@@ -1504,6 +1627,12 @@ impl Tty7App {
 
         if let Some(err) = &self.sftp_panel.error {
             return container.child(note(err.clone().into(), danger));
+        }
+        if self.sftp_panel.pending_navigation.is_some() {
+            return container.child(note(t(L10nKey::SwitcherStatusConnecting).into(), muted));
+        }
+        if self.sftp_panel.loading && self.sftp_panel.entries.is_empty() {
+            return container.child(note(t(L10nKey::SftpLoading).into(), muted));
         }
 
         let filter = self.sftp_panel.filter_input.read(cx).value().to_string();
@@ -1938,6 +2067,7 @@ impl Tty7App {
             && matches!(job.kind, SftpTransferKind::Download)
             && !job.local.is_empty();
         let local = job.local.clone();
+        let retry = job.clone();
 
         v_flex()
             .gap_0p5()
@@ -1967,6 +2097,11 @@ impl Tty7App {
                                 move |this, _, _w, cx| this.sftp_reveal_download(local.clone(), cx),
                             )),
                         )
+                    })
+                    .when(matches!(job.state, SftpJobState::Error | SftpJobState::Cancelled), |this| {
+                        this.child(Button::new(("sftp-retry-job", job_id as usize))
+                            .label(t(L10nKey::RemoteActionRetry)).xsmall().ghost()
+                            .on_click(cx.listener(move |this, _, _, cx| this.sftp_retry_job(retry.clone(), cx))))
                     })
                     .when(running, |this| {
                         this.child(
@@ -2023,6 +2158,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn connection_retry_preserves_requested_directory_and_login_lookup() {
+        let retry = pending_navigation(SSH_NOT_READY, Some("/srv/data".into()), 0).unwrap();
+        assert_eq!(retry.path.as_deref(), Some("/srv/data"));
+        assert_eq!(retry.attempt, 1);
+        let login = pending_navigation(SSH_NOT_READY, None, 1).unwrap();
+        assert_eq!(login.path, None);
+        assert_eq!(login.attempt, 2);
+    }
+
+    #[test]
+    fn connection_retry_is_bounded_and_does_not_hide_real_errors() {
+        assert!(pending_navigation(SSH_NOT_READY, None, CONNECTION_RETRIES - 1).is_some());
+        assert!(pending_navigation(SSH_NOT_READY, None, CONNECTION_RETRIES).is_none());
+        for error in ["permission denied", "no such file", "connection closed"] {
+            assert!(pending_navigation(error, Some("/srv/data".into()), 0).is_none());
+        }
+    }
+
+
+    #[test]
     fn a_fresh_open_starts_at_the_shell_directory() {
         let shell = Some("/srv/app".to_string());
         let last = Some("/var/log".to_string());
@@ -2055,6 +2210,8 @@ mod tests {
 
     fn upload(job_id: u64, state: SftpJobState) -> SftpJobProgress {
         SftpJobProgress {
+            recursive: false,
+            method: String::new(),
             job_id,
             pane_id: 1,
             kind: SftpTransferKind::Upload,

@@ -4,6 +4,7 @@ pub mod host_info;
 pub mod known_hosts;
 pub mod session;
 pub mod sftp;
+pub mod rsync;
 pub mod workspace;
 
 mod auth;

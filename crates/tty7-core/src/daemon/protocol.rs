@@ -291,6 +291,7 @@ pub struct SftpEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SftpOp {
+    TransferMethod,
     Stat {
         path: String,
     },
@@ -340,6 +341,7 @@ pub enum SftpOp {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SftpOpResult {
+    TransferMethod(String),
     Done,
     Stat(SftpEntry),
     Link(String),
@@ -384,6 +386,10 @@ pub enum SftpJobState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SftpJobProgress {
+    #[serde(default)]
+    pub recursive: bool,
+    #[serde(default)]
+    pub method: String,
     pub job_id: u64,
     pub pane_id: u64,
     pub kind: SftpTransferKind,
@@ -1939,6 +1945,8 @@ mod tests {
             }),
             DaemonMsg::SftpTransferStarted { job_id: 3 },
             DaemonMsg::SftpTransferProgress(vec![SftpJobProgress {
+                recursive: false,
+                method: String::new(),
                 job_id: 3,
                 pane_id: 4,
                 kind: SftpTransferKind::Download,

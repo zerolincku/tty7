@@ -24,6 +24,7 @@ OPTIONS:
 ";
 
 fn main() -> ExitCode {
+    tty7_core::daemon::ssh::rsync::bridge_entry();
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.first().map(String::as_str) == Some("agent-hook") {

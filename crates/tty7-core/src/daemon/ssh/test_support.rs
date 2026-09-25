@@ -28,6 +28,9 @@ pub(crate) enum Exec {
     /// Success, a line of output, exit status 0, EOF and CLOSE: a command
     /// that ran and finished, after which the server closes first.
     Exits,
+    /// Execute commands locally, only for rsync wire integration tests.
+    Shell,
+    MissingRsync,
     /// Success and nothing more: a command that never finishes. The server
     /// never closes, so only the client can.
     Hangs,
@@ -41,6 +44,7 @@ struct Counts {
 }
 
 struct Sshd {
+    channels: std::collections::HashMap<ChannelId, Channel<server::Msg>>,
     exec: Exec,
     max_sessions: Option<usize>,
     counts: Arc<Counts>,
@@ -55,7 +59,7 @@ impl server::Handler for Sshd {
 
     async fn channel_open_session(
         &mut self,
-        _channel: Channel<server::Msg>,
+        channel: Channel<server::Msg>,
         reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
@@ -70,6 +74,7 @@ impl server::Handler for Sshd {
             reply.reject(ChannelOpenFailure::ConnectFailed).await;
             return Ok(());
         }
+        self.channels.insert(channel.id(), channel);
         self.counts.opened.fetch_add(1, Ordering::SeqCst);
         reply.accept().await;
         Ok(())
@@ -78,10 +83,63 @@ impl server::Handler for Sshd {
     async fn exec_request(
         &mut self,
         channel: ChannelId,
-        _command: &[u8],
+        command: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
+        if let Exec::MissingRsync = self.exec {
+            session.exit_status_request(channel, 127)?;
+            session.eof(channel)?;
+            session.close(channel)?;
+        }
+        if let Exec::Shell = self.exec {
+            let stream = self.channels.remove(&channel).unwrap().into_stream();
+            let handle = session.handle();
+            let command = String::from_utf8_lossy(command).into_owned();
+            tokio::spawn(async move {
+                let mut child = tokio::process::Command::new("/bin/sh")
+                    .args(["-c", &command])
+                    .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .kill_on_drop(true)
+                    .spawn()
+                    .unwrap();
+                let mut stdin = child.stdin.take().unwrap();
+                let mut stdout = child.stdout.take().unwrap();
+                let mut stderr = child.stderr.take().unwrap();
+                let (mut read, mut write) = tokio::io::split(stream);
+                let input = tokio::spawn(async move {
+                    let _ = tokio::io::copy(&mut read, &mut stdin).await;
+                });
+                let output = tokio::spawn(async move {
+                    let _ = tokio::io::copy(&mut stdout, &mut write).await;
+                });
+                let error_handle = handle.clone();
+                let errors = tokio::spawn(async move {
+                    use tokio::io::AsyncReadExt;
+                    let mut b = [0; 4096];
+                    while let Ok(n) = stderr.read(&mut b).await {
+                        if n == 0 {
+                            break;
+                        }
+                        let _ = error_handle
+                            .extended_data(channel, 1, b[..n].to_vec())
+                            .await;
+                    }
+                });
+                let status = child.wait().await.unwrap();
+                let _ = output.await;
+                let _ = errors.await;
+                input.abort();
+                let _ = handle
+                    .exit_status_request(channel, status.code().unwrap_or(1) as u32)
+                    .await;
+                let _ = handle.eof(channel).await;
+                let _ = handle.close(channel).await;
+            });
+        }
         if let Exec::Exits = self.exec {
             session.data(channel, &b"ok\n"[..])?;
             session.exit_status_request(channel, 0)?;
@@ -131,6 +189,7 @@ impl FakeSshd {
             .keys
             .push(PrivateKey::from(Ed25519Keypair::from_seed(&[7; 32])));
         let handler = Sshd {
+            channels: Default::default(),
             exec,
             max_sessions,
             counts: Arc::clone(&counts),

@@ -1066,6 +1066,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SftpEditRename => "Rename",
         L10nKey::SftpEditPermissions => "Permissions · {mode}",
         L10nKey::SftpLoading => "Loading…",
+        L10nKey::SftpConnectionNotReady => "SSH is not ready. Refresh after connecting.",
         L10nKey::SftpEmptyDirectory => "Empty directory.",
         L10nKey::SftpContextOpen => "Open",
         L10nKey::SftpContextEdit => "Edit",

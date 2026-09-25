@@ -772,6 +772,7 @@ l10n_keys! {
     SftpEditRename,
     SftpEditPermissions,
     SftpLoading,
+    SftpConnectionNotReady,
     SftpEmptyDirectory,
     SftpContextOpen,
     SftpContextEdit,

@@ -179,19 +179,45 @@ impl Default for JobProgress {
     }
 }
 
-struct Job {
+pub(super) struct Job {
     id: u64,
     pane_id: u64,
     kind: SftpTransferKind,
     local: String,
     remote: String,
+    recursive: bool,
+    connection: ConnectionKey,
+    method: Mutex<String>,
     cancel: AtomicBool,
-    progress: Mutex<JobProgress>,
+    pub(super) progress: Mutex<JobProgress>,
     done_at: Mutex<Option<Instant>>,
 }
 
 impl Job {
-    fn is_cancelled(&self) -> bool {
+    #[cfg(test)]
+    pub(super) fn test_job(total: u64) -> Self {
+        let mut progress = JobProgress::new();
+        progress.set_total(total);
+        Self {
+            id: 1,
+            pane_id: 1,
+            kind: SftpTransferKind::Download,
+            local: String::new(),
+            remote: String::new(),
+            recursive: false,
+            connection: ConnectionKey("test".into()),
+            method: Mutex::new(String::new()),
+            cancel: AtomicBool::new(false),
+            progress: Mutex::new(progress),
+            done_at: Mutex::new(None),
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn cancel_for_test(&self) {
+        self.cancel.store(true, Ordering::SeqCst);
+    }
+
+    pub(super) fn is_cancelled(&self) -> bool {
         self.cancel.load(Ordering::SeqCst)
     }
 
@@ -199,7 +225,7 @@ impl Job {
         self.progress.lock().unwrap().set_total(total);
     }
 
-    fn set_current(&self, path: impl Into<String>) {
+    pub(super) fn set_current(&self, path: impl Into<String>) {
         self.progress.lock().unwrap().set_current(path);
     }
 
@@ -225,6 +251,8 @@ impl Job {
     fn snapshot(&self) -> SftpJobProgress {
         let p = self.progress.lock().unwrap();
         SftpJobProgress {
+            recursive: self.recursive,
+            method: self.method.lock().unwrap().clone(),
             job_id: self.id,
             pane_id: self.pane_id,
             kind: self.kind,
@@ -239,10 +267,13 @@ impl Job {
     }
 
     fn is_expired(&self) -> bool {
-        matches!(
-            *self.done_at.lock().unwrap(),
-            Some(t) if t.elapsed() > JOB_RETENTION
-        )
+        let retention = if self.progress.lock().unwrap().state == SftpJobState::Done {
+            JOB_RETENTION
+        } else {
+            // Give interrupted transfers enough history to use the retry action.
+            Duration::from_secs(3600)
+        };
+        self.done_at.lock().unwrap().is_some_and(|t| t.elapsed() > retention)
     }
 }
 
@@ -307,6 +338,16 @@ impl SftpManager {
     }
 
     pub fn op(&self, conn: &Arc<SshConnection>, op: &SftpOp) -> SftpOpResult {
+        if matches!(op, SftpOp::TransferMethod) {
+            return match SshManager::global()
+                .handle()
+                .block_on(super::rsync::detect(conn))
+            {
+                Ok(Some(_)) => SftpOpResult::TransferMethod("rsync".into()),
+                Ok(None) => SftpOpResult::TransferMethod("sftp".into()),
+                Err(e) => SftpOpResult::Error(e),
+            };
+        }
         let result = SshManager::global().handle().block_on(async {
             self.with_session(conn, |sftp| async move { run_op(&sftp, op).await })
                 .await
@@ -333,14 +374,79 @@ impl SftpManager {
             kind: spec.kind,
             local: spec.local.to_string_lossy().to_string(),
             remote: spec.remote.clone(),
+            recursive: spec.recursive,
+            connection: conn.key().clone(),
+            method: Mutex::new(String::new()),
             cancel: AtomicBool::new(false),
             progress: Mutex::new(JobProgress::new()),
             done_at: Mutex::new(None),
         });
-        self.jobs.lock().unwrap().insert(id, job.clone());
+        {
+            let mut jobs = self.jobs.lock().unwrap();
+            if jobs.values().any(|other| {
+                let same_target = match spec.kind {
+                    SftpTransferKind::Download => {
+                        other.kind == spec.kind && other.local == job.local
+                    }
+                    SftpTransferKind::Upload => {
+                        other.kind == spec.kind
+                            && other.connection == job.connection
+                            && other.remote == job.remote
+                    }
+                };
+                same_target && matches!(other.progress.lock().unwrap().state, SftpJobState::Running)
+            }) {
+                return Err("此目标已有传输任务，请等待完成或取消后重试".into());
+            }
+            jobs.insert(id, job.clone());
+        }
 
+        let conn = conn.clone();
         SshManager::global().handle().spawn(async move {
-            run_transfer(sftp, spec, job).await;
+            let result = async {
+                match super::rsync::detect(&conn).await? {
+                    None => {
+                        *job.method.lock().unwrap() = "sftp".into();
+                        run_transfer(sftp, spec, job.clone()).await;
+                        return Ok(());
+                    }
+                    Some(binary) => {
+                        *job.method.lock().unwrap() = "rsync".into();
+                        let (total, directory) = match spec.kind {
+                            SftpTransferKind::Download => (
+                                remote_size(&sftp, &spec.remote, spec.recursive, &job).await?,
+                                sftp.metadata(spec.remote.clone())
+                                    .await
+                                    .map_err(|e| e.to_string())?
+                                    .is_dir(),
+                            ),
+                            SftpTransferKind::Upload => (
+                                local_size(&spec.local, spec.recursive, &job).await?,
+                                tokio::fs::metadata(&spec.local)
+                                    .await
+                                    .map_err(|e| e.to_string())?
+                                    .is_dir(),
+                            ),
+                        };
+                        job.set_total(total);
+                        if job.is_cancelled() {
+                            return Err(cancelled());
+                        }
+                        super::rsync::transfer(binary, conn, &spec, directory, &job).await?;
+                        job.progress.lock().unwrap().bytes_done = total;
+                        job.finish();
+                        Ok(())
+                    }
+                }
+            }
+            .await;
+            if let Err(e) = result {
+                if job.is_cancelled() {
+                    job.mark_cancelled();
+                } else {
+                    job.fail(e);
+                }
+            }
         });
         Ok(id)
     }
@@ -470,6 +576,7 @@ async fn list_dir(sftp: &SftpSession, path: &str) -> Result<Vec<SftpEntry>, Stri
 
 async fn run_op(sftp: &SftpSession, op: &SftpOp) -> Result<SftpOpResult, String> {
     Ok(match op {
+        SftpOp::TransferMethod => return Err("transfer method requires SSH connection".into()),
         SftpOp::Stat { path } => {
             let attrs = sftp
                 .metadata(path.clone())
@@ -1108,6 +1215,9 @@ mod tests {
     #[test]
     fn job_snapshot_reflects_progress() {
         let job = Job {
+            recursive: false,
+            connection: ConnectionKey("test".into()),
+            method: Mutex::new(String::new()),
             id: 7,
             pane_id: 3,
             kind: SftpTransferKind::Download,

@@ -1132,6 +1132,7 @@ pub fn translate_ja(key: L10nKey) -> Option<&'static str> {
         L10nKey::SftpEditRename => "名前を変更",
         L10nKey::SftpEditPermissions => "権限 · {mode}",
         L10nKey::SftpLoading => "読み込み中…",
+        L10nKey::SftpConnectionNotReady => "SSH 接続の準備ができていません。接続後に更新してください。",
         L10nKey::SftpEmptyDirectory => "空のディレクトリです",
         L10nKey::SftpContextOpen => "開く",
         L10nKey::SftpContextEdit => "編集",

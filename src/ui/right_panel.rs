@@ -592,6 +592,18 @@ impl Tty7App {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.panel_title_with_badge(text, count, None, trailing, window, cx)
+    }
+
+    pub(crate) fn panel_title_with_badge(
+        &self,
+        text: &str,
+        count: Option<String>,
+        badge: Option<String>,
+        trailing: Option<AnyElement>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let tabs = (!cfg!(target_os = "macos")).then(|| self.right_panel_tabs(cx));
         let has_trailing = trailing.is_some();
         if tabs.is_none() && !has_trailing {
@@ -641,6 +653,12 @@ impl Tty7App {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(c),
                         )
+                    })
+                    .when_some(badge, |this, badge| {
+                        this.child(div().text_size(rems(META))
+                            .text_color(cx.theme().muted_foreground)
+                            .bg(cx.theme().secondary).rounded_md().px_2().py_0p5()
+                            .child(badge))
                     }),
             )
             .child(div().flex_1().min_w_0())
